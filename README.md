@@ -40,6 +40,11 @@ The dashboard only processes ledger entries that are new since the last refresh,
 and skips refreshes when nothing has changed or the browser tab is hidden. A live update takes about 1 ms and
 50 KB, down from 1.1 s and 390 KB.
 ## Live REALTIME run (jury)
+**One command:** `python3 live.py --team 01 --code <passcode>` runs the connection check, starts the dashboard, opens
+the browser, streams the data and keeps the Mac awake. Ctrl+C stops everything. Variants:
+`python3 live.py --mode HISTORICAL --team 03 --code team03` (live-style replay into a separate test ledger) and
+`python3 live.py --mock` (rehearsal against `mock_server.py`). The manual steps below do the same thing by hand.
+
 1. **Before your slot:** `python3 monitor.py --mode REALTIME --team 01 --code <passcode> --check`. It reads only BAG-01 /
    PVC-01, so it never uses up assembly data, and it wakes up the hosted simulator (the first call can take up to a
    minute).
