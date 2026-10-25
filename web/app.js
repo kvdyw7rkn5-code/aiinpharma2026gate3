@@ -96,17 +96,38 @@ const TAB_INTRO = {
   data: 'Everything received from the simulator, how good the data is, and where the line came closest to failing.',
   lab: 'Train models on one dataset, test them on another, and see where each model predicts the first failure.',
   cmp: 'Results of comparing 14 prediction models on the real data, and why the simple formula stays in production.',
+  audit: 'For the jury: trace any unit end to end, browse every stored record, re-verify the fingerprints and download everything.',
 };
 let cur = 'live';
-function show(t) {
+function show(t, anchor) {
   if (!TAB_INTRO[t]) t = 'live';
   cur = t;
   document.querySelectorAll('main > section').forEach(s => s.classList.toggle('on', s.id === 'tab-' + t));
   document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
   $('tabintro').textContent = TAB_INTRO[t];
-  history.replaceState(null, '', '#' + t);
-  ({how: renderHow, live: renderLive, data: loadData, lab: initLab, cmp: loadCmp})[t]();
+  history.replaceState(null, '', '#' + t + (anchor ? '/' + anchor : ''));
+  return Promise.resolve(({how: renderHow, live: renderLive, data: loadData, lab: initLab, cmp: loadCmp, audit: loadAudit})[t]());
 }
+
+/* "Show me" links: switch tab, wait for it to render, scroll to the element and highlight it. */
+async function goto(tab, id, unit) {
+  await show(tab, id);
+  if (unit) await traceUnit(unit);
+  await new Promise(r => setTimeout(r, 120));
+  const el = $(id);
+  if (!el) return;
+  const target = ['CANVAS', 'TABLE', 'TBODY'].includes(el.tagName) || !el.offsetHeight ? (el.closest('.card') || el) : el;
+  target.scrollIntoView({block: 'center'});
+  target.classList.remove('flash'); void target.offsetWidth; target.classList.add('flash');
+}
+document.addEventListener('click', e => {
+  const a = e.target.closest('[data-goto]');
+  if (!a) return;
+  e.preventDefault();
+  const [tab, id, unit] = a.dataset.goto.split('|');
+  goto(tab, id, unit);
+});
+const showme = (label, tab, id, unit = '') => `<a data-goto="${tab}|${id}|${unit}" href="#${tab}/${id}">→ ${label}</a>`;
 document.querySelectorAll('#tabs button').forEach(b => b.onclick = () => show(b.dataset.tab));
 
 /* ------------------------------------------------------------------ header */
@@ -125,8 +146,39 @@ function renderHeader(s) {
 }
 
 /* ------------------------------------------------------------------ HOW IT WORKS */
-function renderHow() {
+async function renderHow() {
   $('glossary').innerHTML = Object.values(GL).map(([t, d]) => `<tr><th>${t}</th><td>${d}</td></tr>`).join('');
+  $('urs-rerun').onclick = renderHow;
+  $('urs-time').textContent = 'checking…';
+  const [U, Q] = await Promise.all([(await fetch('/api/urs')).json(), (await fetch('/api/quickunits')).json()]);
+  const pick = k => (Q.find(q => q.kind === k) || {}).unit_id;
+  const anyUnit = pick('PREDICTION') || pick('EVALUATION') || pick('EXTREME') || pick('FIRST');
+  const lockLine = (Q.find(q => q.kind === 'PREDICTION') || {line: 'ASM-01'}).line;
+  const hasPred = !!pick('PREDICTION');
+  const HOW = {
+    'URS-DI-001': ['Every stored record gets the unique ID <code>MODE/LINE/event number</code> (e.g. HISTORICAL/ASM-01/001179) plus its line and Unit ID. The database refuses a second record with the same ID.',
+      [showme('Audit trail › one unit with its record ID', 'audit', 'trace-rec', anyUnit), showme('Audit trail › ledger browser', 'audit', 'ledger-card'),
+       showme('Data explorer › traceability and sequence checks', 'data', 'd-checks')]],
+    'URS-DI-002': ['Every API response is stored word for word before it is read, then each record separately. Records can only be added; a SHA-256 hash chain proves nothing changed. Source timestamps are kept as sent.',
+      [showme('Audit trail › the raw API response of a unit', 'audit', 'trace-raw', anyUnit), showme('Audit trail › re-verify all fingerprints', 'audit', 'verify-card'),
+       showme('Header › “Records intact” badge', 'live', 'hdr-pills'), showme('Data explorer › timestamps per source', 'data', 'd-timing')]],
+    'URS-DI-003': ['A drift alarm meter (CUSUM) and a trend line watch the difference between measured and expected depth. On a drift, the first out-of-spec Unit ID is forecast and locked once, with line, predicted unit, current unit and UTC time.',
+      [showme('Live monitor › drift alarm meter', 'live', 'c-' + lockLine), hasPred ? showme('Live monitor › locked prediction', 'live', 'lk-' + lockLine) : '',
+       showme('Live monitor › system messages (alarms)', 'live', 'alerts'), showme('Data explorer › synthetic failure runs', 'data', 'd-sim-card'),
+       showme('Model lab › where each model predicts the failure', 'lab', 'l-run')]],
+    'URS-DI-004': ['Each unit record names its bag lot and tube reel, which link to their BAG-01 / PVC-01 measurements; predictions and inspection results are stored with line and Unit ID.',
+      [showme('Audit trail › full chain for a unit', 'audit', 'trace-chain', anyUnit), showme('Data explorer › traceability checks', 'data', 'd-checks')]],
+    'URS-DI-005': ['One append-only database file that survives restarts; the monitor resumes from it. This site opens it read-only and offers lookup, browsing, re-verification and a full export.',
+      [showme('Audit trail › ledger browser', 'audit', 'ledger-card'), showme('Audit trail › verify and download export', 'audit', 'verify-card'),
+       showme('Header › number of stored records', 'live', 'hdr-pills')]],
+  };
+  const pill = s => s === 'PASS' ? '<span class="pill ok">✓ PASS</span>' : s === 'FAIL' ? '<span class="pill bad">✖ FAIL</span>' : `<span class="pill nt">${s}</span>`;
+  $('urs').innerHTML = '<tr><th>URS</th><th>requirement (verbatim)</th><th>ALCOA+</th><th>how the system meets it</th><th>live evidence</th><th>show me</th></tr>' +
+    U.urs.map(u => `<tr><td><b>${u.id}</b><br>${pill(u.status)}</td><td class="req">${esc(u.text)}</td><td>${u.alcoa}</td>
+      <td>${HOW[u.id][0]}</td><td><ul>${u.evidence.map(e => `<li>${esc(e)}</li>`).join('')}</ul></td>
+      <td class="showme">${HOW[u.id][1].join('')}</td></tr>`).join('');
+  const all = U.urs.every(u => u.status === 'PASS');
+  $('urs-time').innerHTML = `${all ? '<span class="pill ok">all 5 PASS</span>' : ''} checked ${U.checked_utc.replace('T', ' ').slice(0, 19)} UTC on the ${U.mode} ledger`;
 }
 
 /* ------------------------------------------------------------------ LIVE */
@@ -543,6 +595,91 @@ async function loadCmp() {
       and cannot be explained to an inspector. The ${modelTag('M12')} is the only credible alternative.</p>`;
 }
 
+/* ------------------------------------------------------------------ AUDIT TRAIL */
+let auditInit = false, ledgerBefore = null;
+async function loadAudit() {
+  if (auditInit) return;
+  auditInit = true;
+  $('unit-go').onclick = () => traceUnit($('unit-in').value);
+  $('unit-in').onkeydown = e => { if (e.key === 'Enter') traceUnit($('unit-in').value); };
+  const Q = await (await fetch('/api/quickunits')).json();
+  const LBL = {PREDICTION: 'predicted failure', EVALUATION: 'actual first failure', EXTREME: 'furthest from target', FIRST: 'first unit'};
+  const seen = new Set();
+  $('quick').innerHTML = 'Try: ' + Q.filter(q => !seen.has(q.unit_id) && seen.add(q.unit_id)).slice(0, 8)
+    .map(q => `<button class="small" data-unit="${q.unit_id}">${q.unit_id} <span class="note">${q.line} · ${LBL[q.kind]}</span></button>`).join(' ');
+  $('quick').querySelectorAll('[data-unit]').forEach(b => b.onclick = () => traceUnit(b.dataset.unit));
+  $('verify-go').onclick = async () => {
+    $('verify-out').textContent = 'checking every fingerprint…';
+    const v = await (await fetch('/api/verify')).json();
+    $('verify-out').innerHTML = v.ok ? `<span class="pill ok">✓ intact</span> ${fmt(v.entries)} records verified at ${v.checked_utc.replace('T', ' ').slice(0, 19)} UTC`
+      : `<span class="pill bad">✖ BROKEN</span> ${esc(v.problem)}`;
+  };
+  $('ledger-kind').onchange = () => { ledgerBefore = null; $('ledger').innerHTML = ''; loadLedger(); };
+  $('ledger-more').onclick = loadLedger;
+  await loadLedger();
+}
+async function loadLedger() {
+  const k = $('ledger-kind').value || '';
+  const L = await (await fetch(`/api/ledger?limit=40&kind=${k}` + (ledgerBefore ? `&before=${ledgerBefore}` : ''))).json();
+  if (!$('ledger-kind').options.length)
+    $('ledger-kind').innerHTML = '<option value="">all kinds</option>' + Object.entries(L.kinds).map(([kk, c]) => `<option value="${kk}">${kk} (${fmt(c)})</option>`).join('');
+  if (!$('ledger').innerHTML) $('ledger').innerHTML = '<tr><th>#</th><th>kind</th><th>record ID</th><th>unit</th><th>source time</th><th>received (UTC)</th><th>fingerprint</th></tr>';
+  $('ledger').insertAdjacentHTML('beforeend', L.rows.map(r => `<tr class="${r.unit_id && r.kind === 'ASM' ? 'click' : ''}" data-unit="${r.kind === 'ASM' ? r.unit_id || '' : ''}">
+    <td>${r.seq}</td><td>${r.kind}</td><td class="mono">${esc(r.record_uid)}</td><td>${r.unit_id || ''}</td><td>${r.source_time || ''}</td>
+    <td>${r.received_utc}</td><td class="mono" data-tip="entry fingerprint ${r.entry_hash}">${r.entry_hash.slice(0, 12)}…</td></tr>`).join(''));
+  $('ledger').querySelectorAll('tr.click').forEach(tr => tr.onclick = () => { traceUnit(tr.dataset.unit); $('trace-card').scrollIntoView({behavior: 'smooth'}); });
+  if (L.rows.length) ledgerBefore = L.rows[L.rows.length - 1].seq;
+  $('ledger-more').style.display = L.rows.length < 40 ? 'none' : '';
+}
+async function traceUnit(id) {
+  id = (id || '').trim();
+  if (!id) return;
+  if (!auditInit) await loadAudit();
+  $('unit-in').value = id;
+  $('trace').innerHTML = '<p class="note">tracing…</p>';
+  const T = await (await fetch('/api/unit?id=' + encodeURIComponent(id))).json();
+  if (T.error) {
+    $('trace').innerHTML = `<p class="FAIL">${esc(T.error)}</p>` + (T.suggestions.length ? '<p>Did you mean: ' +
+      T.suggestions.map(s => `<button class="small" data-unit="${s}">${s}</button>`).join(' ') + '</p>' : '');
+    $('trace').querySelectorAll('[data-unit]').forEach(b => b.onclick = () => traceUnit(b.dataset.unit));
+    return;
+  }
+  const r = T.raw_response, b = T.bag, p = T.pvc, P = T.prediction, E = T.evaluation, I = T.inspection, L = T.ledger;
+  const kv = o => '<table class="kv">' + Object.entries(o).map(([k, v]) => `<tr><th>${k}</th><td>${esc(v)}</td></tr>`).join('') + '</table>';
+  const linkbox = (id, cls, title, html) => `<div class="link ${cls}" id="${id}"><h3>${title}</h3>${html}</div>`;
+  $('trace').innerHTML = `
+    <h3>${T.unit_id} · ${T.line_id} ${I.conforming ? '<span class="pill ok">inside 13–17 mm</span>' : '<span class="pill bad">OUT OF SPEC</span>'}
+      ${T.role.map(x => `<span class="pill lock">${esc(x)}</span>`).join(' ')}</h3>
+    <div class="chain" id="trace-chain">
+      ${r ? linkbox('trace-raw', 'ok', '1 · Raw API response', `received ${r.received_utc}<br>request <code>${esc(r.request)}</code> (HTTP ${r.http_status})<br>
+         record ${r.position} of ${r.records_in_response}<br><span class="mono">${r.record_uid}<br>sha256 ${r.payload_sha256.slice(0, 16)}…</span><br>
+         ${r.matches_stored_record ? '<b class="PASS">✓ identical to the stored record</b>' : '<b class="FAIL">✖ differs from the stored record</b>'}`)
+        : linkbox('trace-raw', 'none', '1 · Raw API response', 'Synthetic data: generated on this computer, no API response.')}
+      ${linkbox('trace-rec', 'ok', '2 · Stored record', `<span class="mono">${L.record_uid}</span><br>event no. ${L.event_no}<br>source time ${L.source_time}<br>
+         received ${L.received_utc}<br><span class="mono" data-tip="entry fingerprint ${L.entry_hash}">fingerprint ${L.entry_hash.slice(0, 16)}…</span>`)}
+      ${b ? linkbox('trace-bag', 'ok', '3 · Bag lot ' + esc(T.record.bag_lot_id), `${b.records} port measurements (BAG-01)<br>average ${b.mean.toFixed(5)} in
+         (${b.min}–${b.max})<br>measured ${b.first_time} → ${b.last_time}<br><span class="mono">${b.first_uid} … ${b.last_uid.split('/').pop()}</span>`)
+        : linkbox('trace-bag', 'bad', '3 · Bag lot', 'No BAG-01 data for this lot.')}
+      ${p ? linkbox('trace-pvc', 'ok', '4 · Tube reel ' + esc(T.record.reel_id), `${p.records} OD readings (PVC-01)<br>average ${p.mean.toFixed(5)} in
+         (${p.min}–${p.max})<br>extruded ${p.first_time} → ${p.last_time}<br><span class="mono">${p.first_uid} … ${p.last_uid.split('/').pop()}</span>`)
+        : linkbox('trace-pvc', 'bad', '4 · Tube reel', 'No PVC-01 data for this reel.')}
+      ${P ? linkbox('trace-pred', 'lockc', '5 · Prediction for ' + T.line_id, `predicted first failure <b>${P.predicted_unit_id}</b><br>while processing ${P.current_unit_id}<br>
+         locked ${P.prediction_time_utc}<br><span class="mono">${P.record_uid}<br>fingerprint ${P.entry_hash.slice(0, 16)}…</span>`)
+        : linkbox('trace-pred', 'none', '5 · Prediction for ' + T.line_id, 'No prediction on this line: no de-calibration was detected.')}
+      ${linkbox('trace-insp', I.conforming ? 'ok' : 'bad', '6 · Inspection result', `camera depth <b>${I.depth_mm} mm</b><br>limits ${I.limits_mm.join('–')} mm →
+         ${I.conforming ? 'conforming' : '<b class="FAIL">nonconforming</b>'}` + (E ? `<br>line's first failure: <b>${E.actual_first_failure_unit_id}</b><br>prediction result: <b>${E.status}</b>` : ''))}
+    </div>
+    <div class="grid2 tight"><div><h3>Original record, exactly as received</h3>${kv(T.record)}</div>
+      <div><h3>Ledger entry</h3>${kv({'record ID': L.record_uid, 'ledger position': L.seq, 'event number': L.event_no, 'source time': L.source_time,
+        'received (UTC)': L.received_utc, 'stored by': L.actor, 'content fingerprint': L.payload_sha256, 'previous entry fingerprint': L.prev_hash, 'entry fingerprint': L.entry_hash})}</div></div>`;
+  history.replaceState(null, '', '#audit/trace');
+}
+
 /* ------------------------------------------------------------------ boot */
 meta().catch(() => {});
-tick(true).then(() => show(location.hash.slice(1) || 'live'));
+tick(true).then(() => {
+  const unit = new URLSearchParams(location.search).get('unit');      // shareable: /?unit=EFD_A1179
+  if (unit) return goto('audit', 'trace-chain', unit);
+  const [t, id] = (location.hash.slice(1) || 'live').split('/');
+  return id ? goto(t, id) : show(t);
+});

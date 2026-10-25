@@ -6,6 +6,9 @@ Serves the web app in web/ (index.html, app.css, app.js) and these JSON endpoint
   /api/models         model comparison report (models_report.json)
   /api/lab/datasets   datasets and model descriptions for the model lab
   /api/lab?...        train / test / twin replay for the selected models (in memory only)
+  /api/urs            URS-DI-001..005 assertions, recomputed from the ledger on every request
+  /api/unit?id=...    end-to-end trace of one unit (record, raw response, bag lot, reel, prediction, result)
+  /api/ledger         ledger browser · /api/verify re-checks the hash chain · /api/export downloads it all
 
 The dashboard opens the ledger with SQLite mode=ro, so it can never change records (URS-DI-005).
 All derived values shown are recomputed from the stored original records with the frozen model.
@@ -19,6 +22,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
+import audit
 import lab
 from analysis import analyze
 from model import LineMonitor, MaterialBook
@@ -140,6 +144,29 @@ class Handler(BaseHTTPRequestHandler):
                 body = _gz({"unchanged": True, "tip": tip})
         elif url.path == "/api/analysis":
             body = analysis_cached(self.server.db, self.server.mode)
+        elif url.path == "/api/urs":
+            body = _gz(audit.urs_checks(self.server.db, self.server.mode))
+        elif url.path == "/api/unit":
+            q = parse_qs(url.query)
+            body = _gz(audit.unit_trace(self.server.db, self.server.mode, q.get("id", [""])[0].strip()))
+        elif url.path == "/api/quickunits":
+            body = _gz(audit.predictions_and_failures(self.server.db, self.server.mode))
+        elif url.path == "/api/ledger":
+            q = {k: v[0] for k, v in parse_qs(url.query).items()}
+            body = _gz(audit.ledger_page(self.server.db, q.get("kind") or None, q.get("limit", 25), q.get("before")))
+        elif url.path == "/api/verify":
+            ok, n, problem = Ledger(self.server.db, readonly=True).verify()
+            body = _gz({"ok": ok, "entries": n, "problem": problem, "checked_utc": audit.utc_now()})
+        elif url.path == "/api/export":
+            body, ctype, cache = gzip.compress(audit.export_bytes(self.server.db), 5), "application/x-ndjson", "no-store"
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Disposition", f'attachment; filename="ledger_{self.server.mode}_export.jsonl"')
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         elif url.path == "/api/lab/datasets":
             body = _gz({"datasets": lab.datasets(), "models": lab.model_info()})
         elif url.path == "/api/lab":

@@ -21,6 +21,9 @@ The website (`web/index.html`, `web/app.css`, `web/app.js`, served by `dashboard
   data quality checks, materials, and the synthetic failure runs.
 - **Model lab:** see below.
 - **Model comparison:** all 14 models side by side, with the verdict.
+- **Audit trail:** for the jury. Trace any unit end to end (raw API response → stored record → bag lot → tube reel →
+  prediction → inspection result, each with its record ID and fingerprint), browse the whole ledger, re-verify the hash
+  chain and download a full export. `/?unit=EFD_A1179` opens a unit directly.
 
 Every technical word (dotted underline) and every model name shows a short explanation when you hover over it.
 Chart.js is served locally from `web/`, so the site works without internet.
@@ -155,6 +158,12 @@ and on the stable 1,800-unit line.
 is equally accurate, extrapolates, and also gives its own uncertainty.
 
 ## Data integrity (ALCOA+ / GxP)
+The **How it works** tab has a live URS table. Each requirement is quoted verbatim and gets a PASS / FAIL / NOT TRIGGERED
+status, recomputed from the ledger on every page load (`audit.py`, `/api/urs`). It also has **Show me** links that jump to
+the place on the site where the feature appears and highlight it. On the historical ledger all five currently pass. For
+example, DI-002 re-compares all 15,264 stored records with the raw API responses (0 differ). DI-003 shows the 3 locked
+predictions of the synthetic runs, each locked before the predicted unit arrived.
+
 | URS | How it is met |
 |---|---|
 | DI-001 | `record_uid = MODE/LINE/event_no` (UNIQUE), plus `line_id` and `unit_id` columns |

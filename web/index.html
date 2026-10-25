@@ -22,6 +22,7 @@
   <button data-tab="data">Data explorer</button>
   <button data-tab="lab">Model lab</button>
   <button data-tab="cmp">Model comparison</button>
+  <button data-tab="audit">Audit trail</button>
 </nav>
 <div class="tabintro" id="tabintro"></div>
 
@@ -44,6 +45,15 @@
       <div class="step"><div class="num">6</div><h3>Check against reality</h3>
         <p>When the camera measures that unit, the system records whether the prediction was a HIT, <span class="term" data-term="early">EARLY, LATE or MISSED</span>.</p></div>
     </div>
+  </div>
+
+  <div class="card" id="urs-card">
+    <h2>Mandatory user requirements · checked live <span id="urs-time" class="note"></span>
+      <button class="small" id="urs-rerun">Re-run checks</button></h2>
+    <p class="note">Each requirement is quoted word for word from the Gate 3 specification. The <b>evidence</b> column is recomputed from the
+      ledger every time this page opens: it is a measurement, not a claim. Use <b>Show me</b> to jump to the place on this site
+      where the feature can be seen; it will be highlighted.</p>
+    <div class="scroll x"><table id="urs" class="urs"></table></div>
   </div>
 
   <div class="grid2">
@@ -75,7 +85,7 @@
       <table id="glossary"></table>
     </div>
     <div class="card">
-      <h2>How data integrity is guaranteed (ALCOA+ / GxP)</h2>
+      <h2>All ALCOA+ principles and how they are met</h2>
       <table class="kv">
         <tr><th>Attributable</th><td>Every record has a unique ID (mode / line / event number), its line and its unit ID.</td></tr>
         <tr><th>Legible</th><td>Plain JSON, readable on this site and in the export file.</td></tr>
@@ -224,6 +234,35 @@
     <div class="card"><h2>Which input matters most?</h2><p class="note">How much worse (mm) each model gets when one input is scrambled.</p><table id="m-imp"></table></div>
     <div class="card"><h2>Why not use the actuator position?</h2><p class="note" id="m-leak"></p></div>
     <div class="card"><h2>The production formula</h2><p class="note" id="m-prod"></p></div>
+  </div>
+</section>
+<!-- ============================================================ AUDIT TRAIL -->
+<section id="tab-audit">
+  <div class="card" id="trace-card">
+    <h2>Trace a unit from start to finish</h2>
+    <p class="note">Type any Unit ID (e.g. <code>EFD_A1179</code>) or pick one below. You will see the API response that delivered it, the record as stored,
+      the bag lot and tube reel it was made from, the prediction for its line and the inspection result, each with its record ID and fingerprint.</p>
+    <div class="tracebar"><input id="unit-in" placeholder="Unit ID, e.g. EFD_A1179" autocomplete="off"><button class="run small" id="unit-go">Trace</button>
+      <span id="quick"></span></div>
+    <div id="trace"></div>
+  </div>
+  <div class="grid2">
+    <div class="card" id="ledger-card"><h2>Ledger browser <select id="ledger-kind"></select></h2>
+      <p class="note">Every entry ever stored, newest first. Click a row with a Unit ID to trace it. Hover a fingerprint to see it in full.</p>
+      <div class="scroll" style="max-height:420px"><table id="ledger"></table></div>
+      <button class="small" id="ledger-more">Show older entries</button></div>
+    <div class="card" id="verify-card"><h2>Verify and export</h2>
+      <p>Re-check every record's SHA-256 fingerprint and the chain between them, right now:</p>
+      <button class="run small" id="verify-go">Verify the whole ledger</button> <span id="verify-out"></span>
+      <p style="margin-top:16px">Download the complete ledger (every record, prediction and result, one JSON line each) for offline review:</p>
+      <a class="run small" id="export-link" href="/api/export" download>Download full export</a>
+      <h3>What the columns mean</h3>
+      <table class="kv">
+        <tr><th>record ID</th><td>MODE / source line / event number at the source, unique (URS-DI-001).</td></tr>
+        <tr><th>source time</th><td>Timestamp sent by the simulator, never changed (URS-DI-002).</td></tr>
+        <tr><th>received (UTC)</th><td>Our own clock at the moment the record arrived or the prediction was locked (contemporaneous).</td></tr>
+        <tr><th>fingerprint</th><td>SHA-256 of this entry including the previous entry's fingerprint: change anything and the chain breaks.</td></tr>
+      </table></div>
   </div>
 </section>
 </main>

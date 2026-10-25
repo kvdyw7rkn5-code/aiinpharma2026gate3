@@ -113,3 +113,24 @@ select{font-size:13px;padding:3px 6px}
 .run{background:var(--brand);color:#fff;border:0;border-radius:8px;padding:10px 22px;cursor:pointer;font-size:14px;font-weight:600}
 .run:disabled{opacity:.6;cursor:wait}
 .sw{display:inline-block;width:12px;height:12px;border-radius:3px;vertical-align:-1px}
+
+/* URS + audit */
+button.small,a.small{font-size:12px;padding:5px 12px;border-radius:6px;border:1px solid #c9ccd2;background:#fff;cursor:pointer;text-decoration:none;color:inherit;display:inline-block}
+a.run.small,button.run.small{background:var(--brand);color:#fff;border-color:var(--brand)}
+table.urs td{font-size:12.5px}
+table.urs td.req{max-width:300px;font-style:italic;color:var(--ink2)}
+table.urs ul{margin:0;padding-left:16px}table.urs li{margin:2px 0}
+.showme a{display:block;margin:3px 0;color:var(--info);text-decoration:none;cursor:pointer;white-space:nowrap}
+.showme a:hover{text-decoration:underline}
+.pill.nt{background:#e3eefb;color:#1c4f8a}
+@keyframes flash{0%{box-shadow:0 0 0 0 rgba(224,161,0,.0)}15%{box-shadow:0 0 0 5px rgba(224,161,0,.9)}70%{box-shadow:0 0 0 5px rgba(224,161,0,.7)}100%{box-shadow:0 0 0 0 rgba(224,161,0,0)}}
+.flash{animation:flash 3.2s ease-out;border-radius:8px;position:relative;z-index:2}
+.tracebar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}
+.tracebar input{font-size:14px;padding:6px 8px;width:240px;border:1px solid #c9ccd2;border-radius:6px}
+.chain{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:10px 0}
+@media (max-width:1100px){.chain{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.link{background:#f7f8fa;border-radius:8px;padding:9px 10px;font-size:12.5px;line-height:1.5;border-top:4px solid var(--brand);word-break:break-word}
+.link h3{margin:0 0 4px;font-size:13px}
+.link.ok{border-top-color:var(--good)}.link.bad{border-top-color:var(--bad)}.link.lockc{border-top-color:var(--lock)}.link.none{border-top-color:#c9ccd2;color:var(--muted)}
+.mono{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--ink2);word-break:break-all}
+#ledger tr.click{cursor:pointer}#ledger tr.click:hover td{background:#eef4ff}
