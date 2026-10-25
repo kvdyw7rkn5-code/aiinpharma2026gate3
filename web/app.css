@@ -134,3 +134,17 @@ table.urs ul{margin:0;padding-left:16px}table.urs li{margin:2px 0}
 .link.ok{border-top-color:var(--good)}.link.bad{border-top-color:var(--bad)}.link.lockc{border-top-color:var(--lock)}.link.none{border-top-color:#c9ccd2;color:var(--muted)}
 .mono{font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--ink2);word-break:break-all}
 #ledger tr.click{cursor:pointer}#ledger tr.click:hover td{background:#eef4ff}
+
+/* MES bar under each line chart */
+.mes{background:#1d2433;color:#e8ecf3;border-radius:8px;margin:6px 0 4px;padding:6px 8px;font-size:11.5px}
+.mes-head{font-size:10.5px;letter-spacing:.04em;color:#9fd3a8;margin-bottom:4px;font-weight:700}
+.mes-head span{color:#9aa4b5;font-weight:400;letter-spacing:0}
+.mes-row{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px}
+.mc{background:#283247;border-radius:5px;padding:4px 6px;min-width:0}
+.ml{font-size:9.5px;color:#9aa4b5;letter-spacing:.05em}
+.mv{font-family:ui-monospace,Menlo,monospace;font-size:13px;font-weight:700;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ms{font-size:10px;color:#b9c2d0;line-height:1.3}
+.mes .red{color:#ff8a80}
+.nw{white-space:nowrap}
+#prod-card .grid3{grid-template-columns:1fr 1.25fr 1.25fr}
+#prod-card .scroll{max-height:340px}

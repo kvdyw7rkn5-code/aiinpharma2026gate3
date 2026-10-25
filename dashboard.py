@@ -91,8 +91,8 @@ class LiveState:
             self.alerts.append(dict(json.loads(r["payload"]), line=r["line_id"], event_no=r["event_no"], utc=r["received_utc"]))
 
     def _build(self, ok, n, problem, tip):
-        keys = ("event_no", "unit_id", "depth", "baseline", "resid", "cusum_pos", "cusum_neg", "nok", "follow_err",
-                "vision_offset", "pressure")
+        keys = ("event_no", "unit_id", "time", "depth", "baseline", "resid", "cusum_pos", "cusum_neg", "nok", "follow_err",
+                "vision_offset", "pressure", "bag_lot", "reel")
         lines = {}
         for line in LINES:
             mon = self.mons.get(line)

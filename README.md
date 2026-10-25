@@ -19,6 +19,12 @@ The website (`web/index.html`, `web/app.css`, `web/app.js`, served by `dashboard
 - **Live monitor:** one card per line. It shows a plain-language status (in control / drift detected /
   prediction locked / failed), key numbers, the depth chart with forecast, the drift alarm meter and the locked
   prediction with its fingerprint. You can show the last 300 units or the whole run.
+  - **MES bar under each chart:** shows the live state of the line: devices produced, OK / out of spec, the current
+    device, bag lot and tube reel (and how many devices each has made), pressure and depth.
+  - **Hover to go back in time:** hovering a chart greys out everything after that device, in both the depth chart
+    and the drift alarm meter, and the MES bar shows the line's state at that moment.
+  - **Production summary:** per line, devices produced and the bag lot / reel in use. Per bag lot and reel: which
+    lines used it, for how many devices, and its measured size. Rows in use right now are highlighted.
 - **Data explorer:** every record from the API, where the line came closest to failing, timestamps per source,
   data quality checks, materials, and the synthetic failure runs.
 - **Model lab:** see below.

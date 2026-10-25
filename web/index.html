@@ -111,6 +111,13 @@
   </div>
   <div class="viewtoggle">Show: <button data-win="300" class="on">last 300 units</button><button data-win="0">whole run</button></div>
   <div class="grid3" id="lines"></div>
+  <div class="card" id="prod-card"><h2>Production summary · feeding devices produced and materials used</h2>
+    <p class="note" id="prod-note"></p>
+    <div class="grid3 tight">
+      <div><h3>Per assembly line</h3><table id="prod-lines"></table></div>
+      <div><h3>Bag lots (BAG-01)</h3><div class="scroll"><table id="prod-bags"></table></div></div>
+      <div><h3>Tube reels (PVC-01)</h3><div class="scroll"><table id="prod-reels"></table></div></div>
+    </div></div>
   <div class="grid2">
     <div class="card"><h2>Materials in use</h2>
       <p class="note">Average bag port size per bag lot and tube size per reel. Each chart's vertical axis spans exactly the specification range, so every bar that fits is in spec.</p>

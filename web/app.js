@@ -243,9 +243,13 @@ function renderLive() {
     const L = live.lines[line];
     if (!$('card-' + line)) host.insertAdjacentHTML('beforeend', `<div class="card linecard" id="card-${line}">
       <h2>${line} <span id="st-${line}"></span></h2><div class="summary" id="sum-${line}"></div><div class="stats" id="stats-${line}"></div>
-      <canvas id="d-${line}" height="200"></canvas>
+      <canvas id="d-${line}" height="200"></canvas><div class="mes" id="mes-${line}"></div>
       <div><h3 data-term="cusum" class="term">Drift alarm meter</h3></div><canvas id="c-${line}" height="70"></canvas>
       <div id="lk-${line}"></div></div>`);
+    if (!$('card-' + line).dataset.hover) {
+      $('card-' + line).dataset.hover = 1;
+      ['d-', 'c-'].forEach(p => $(p + line).addEventListener('mouseleave', () => clearHover(line)));
+    }
     const st = lineStatus(L), [cls, icon, lab] = STATUS[st.s];
     $('st-' + line).innerHTML = `<span class="pill ${cls}">${icon} ${st.label || lab}</span>`;
     $('sum-' + line).innerHTML = st.text;
@@ -277,16 +281,17 @@ function renderLive() {
       hline(17, x0, x1, C.red, 'limits 13 / 17 mm'), hline(13, x0, x1, C.red),
     ];
     if (p) ds.push(vline(p.current_event_no + p.units_ahead, 12.5, 17.5, C.lock, 'locked prediction', [5, 3]));
-    chart('d-' + line, {type: 'scatter', data: {datasets: ds}, options: opts({x: 'device number', y: 'depth (mm)'})});
+    chart('d-' + line, {type: 'scatter', data: {datasets: ds}, options: hoverable(line, opts({x: 'device number', y: 'depth (mm)'}))});
     chart('c-' + line, {type: 'scatter', data: {datasets: [
       {label: 'pushing deeper', data: u.map(r => ({x: r.event_no, y: r.cusum_pos})), borderColor: C.red, borderWidth: 1.3, pointRadius: 0, showLine: true},
       {label: 'pushing shallower', data: u.map(r => ({x: r.event_no, y: r.cusum_neg})), borderColor: PAL[0], borderWidth: 1.3, pointRadius: 0, showLine: true},
-      hline(5, x0, xe, C.grey, 'alarm level 5', [3, 3])]}, options: opts({y: 'meter', ymin: 0, ymax: Math.min(20, Math.max(8, ...u.map(r => Math.max(r.cusum_pos, r.cusum_neg))))})});
+      hline(5, x0, xe, C.grey, 'alarm level 5', [3, 3])]}, options: hoverable(line, opts({y: 'meter', ymin: 0, ymax: Math.min(20, Math.max(8, ...u.map(r => Math.max(r.cusum_pos, r.cusum_neg))))}))});
     $('lk-' + line).innerHTML = p ? `<div class="lockbox">🔒 <b>Locked prediction: ${p.predicted_unit_id}</b> will be the first device out of spec (${p.predicted_failure_mode === 'TOO_DEEP' ? 'too deep' : 'too shallow'}).<br>
       Saved at ${p.prediction_time_utc} while ${p.current_unit_id} was being made, ${p.units_ahead} devices ahead (${term('lead', 'lead time')} L = ${p.units_ahead}).<br>
       <span class="hash" data-tip="SHA-256 fingerprint of this prediction record. If anyone changed it, the fingerprint would no longer match.">fingerprint ${p.entry_hash}</span>
       ${L.evaluation ? `<br><b>Result:</b> ${resultText(L.evaluation)}` : ''}</div>` : '';
   }
+  renderProduction();
   const M = live.materials;
   const bar = (id, obj, lo, hi, c, lab) => chart(id, {type: 'bar', data: {labels: Object.keys(obj), datasets: [{label: lab, data: Object.values(obj), backgroundColor: c, borderRadius: 3}]},
     options: {animation: false, plugins: {legend: {display: false}, title: {display: true, text: lab, font: {size: 12}}}, scales: {y: {min: lo, max: hi, grid: {color: C.grid}}, x: {ticks: {font: {size: 9}}}}}});
@@ -303,6 +308,103 @@ function renderLive() {
       `Alarm meter at ${Math.max(+m[2], +m[3]).toFixed(1)} (alarm above 5).`;
     return `<tr><td>${a.line}</td><td>${a.event_no}</td><td><span class="pill ${c}">${t}</span></td><td class="note" data-tip="${esc(a.text)}">${txt}</td></tr>`;
   }).join('') : '<tr><td class="note">No messages: data complete and no drift detected.</td></tr>';
+}
+
+/* ------------------------------------------------------------------ MES: production state per line */
+// Hovering a line's chart greys out everything after the hovered device and shows the line's state at that moment.
+const HOVER = {}, PROD = {};
+const shadePlugin = {
+  id: 'shade',
+  afterDatasetsDraw(chart) {
+    const line = chart.options.plugins.shade && chart.options.plugins.shade.line, xv = line && HOVER[line];
+    if (xv == null) return;
+    const {ctx, chartArea: a, scales: {x}} = chart, px = x.getPixelForValue(xv);
+    if (px < a.left || px > a.right) return;
+    ctx.save();
+    ctx.fillStyle = 'rgba(115,118,125,0.22)';
+    ctx.fillRect(px, a.top, a.right - px, a.bottom - a.top);
+    ctx.strokeStyle = '#1f3a5f'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.moveTo(px, a.top); ctx.lineTo(px, a.bottom); ctx.stroke();
+    ctx.restore();
+  },
+};
+if (typeof Chart !== 'undefined') Chart.register(shadePlugin);
+function hoverable(line, o) {
+  o.plugins.shade = {line};
+  o.onHover = (evt, els, chart) => {
+    const P = PROD[line], a = chart.chartArea;
+    if (!P || !P.units.length || evt.x < a.left || evt.x > a.right) return clearHover(line);
+    const i = idxAt(P.units, chart.scales.x.getValueForPixel(evt.x));
+    if (HOVER[line] === P.units[i].event_no) return;
+    HOVER[line] = P.units[i].event_no;
+    ['d-', 'c-'].forEach(p => charts[p + line] && charts[p + line].draw());
+    $('mes-' + line).innerHTML = mesHTML(line, i, true);
+  };
+  return o;
+}
+function idxAt(units, xv) {           // last device made at or before x
+  let lo = 0, hi = units.length - 1;
+  if (xv <= units[0].event_no) return 0;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (units[mid].event_no <= xv) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+function clearHover(line) {
+  if (HOVER[line] == null) return;
+  HOVER[line] = null;
+  ['d-', 'c-'].forEach(p => charts[p + line] && charts[p + line].draw());
+  const P = PROD[line];
+  if (P && P.units.length) $('mes-' + line).innerHTML = mesHTML(line, P.units.length - 1, false);
+}
+function mesHTML(line, i, hovering) {
+  const P = PROD[line], u = P.units[i], M = live.materials;
+  const cell = (l, v, sub = '', t = '') => `<div class="mc"${t ? ` data-tip="${t}"` : ''}><div class="ml">${l}</div><div class="mv">${v}</div>${sub ? `<div class="ms">${sub}</div>` : ''}</div>`;
+  const nok = P.nokCum[i];
+  return `<div class="mes-head">${hovering ? `◀ STATE AT DEVICE #${u.event_no} <span>· everything to the right of the line is not produced yet · move away for live</span>`
+      : '● LIVE · current state of the line <span>· hover the chart to go back in time</span>'}</div><div class="mes-row">` +
+    cell('PRODUCED', fmt(i + 1), 'feeding devices', 'Devices assembled on this line up to this moment.') +
+    cell('OK', fmt(i + 1 - nok), pct((i + 1 - nok) / (i + 1)) + ' yield', 'Devices with depth inside 13–17 mm.') +
+    cell('OUT OF SPEC', nok, nok ? 'first: ' + P.firstNok : 'none so far', 'Devices outside 13–17 mm.') +
+    cell('DEVICE', u.unit_id, u.time.replace('T', ' ').replace('Z', ' UTC'), 'Unit ID and completion time from the line.') +
+    cell('BAG LOT', u.bag_lot, `device ${P.bagN[i]} from this lot · port ${M.bag[u.bag_lot] != null ? M.bag[u.bag_lot].toFixed(4) + '″' : '?'}`, 'Bag lot used for this device (BAG-01) and how many devices this line has made from it so far.') +
+    cell('TUBE REEL', u.reel, `device ${P.reelN[i]} from this reel · OD ${M.pvc[u.reel] != null ? M.pvc[u.reel].toFixed(4) + '″' : '?'}`, 'Tube reel used for this device (PVC-01) and how many devices this line has made from it so far.') +
+    cell('PRESSURE', u.pressure + ' bar') +
+    cell('DEPTH', u.depth.toFixed(2) + ' mm', u.nok ? '<b class="red">out of spec</b>' : 'in spec') + '</div>';
+}
+function renderProduction() {
+  const lines = ['ASM-01', 'ASM-02', 'ASM-03'], bags = {}, reels = {};
+  for (const line of lines) {
+    const units = live.lines[line].units, nokCum = [], bagN = [], reelN = [], bc = {}, rc = {};
+    let n = 0, firstNok = null;
+    units.forEach((u, i) => {
+      if (u.nok) { n++; firstNok = firstNok || u.unit_id; }
+      nokCum.push(n); bc[u.bag_lot] = (bc[u.bag_lot] || 0) + 1; rc[u.reel] = (rc[u.reel] || 0) + 1;
+      bagN.push(bc[u.bag_lot]); reelN.push(rc[u.reel]);
+      for (const [T, k] of [[bags, u.bag_lot], [reels, u.reel]]) {
+        const e = T[k] = T[k] || {n: 0, lines: {}, first: u.unit_id, last: null, inUse: []};
+        e.n++; e.lines[line] = (e.lines[line] || 0) + 1; e.last = u.unit_id;
+      }
+    });
+    PROD[line] = {units, nokCum, bagN, reelN, firstNok};
+    if (units.length) {
+      const last = units[units.length - 1];
+      bags[last.bag_lot].inUse.push(line); reels[last.reel].inUse.push(line);
+      if (HOVER[line] == null) $('mes-' + line).innerHTML = mesHTML(line, units.length - 1, false);
+    }
+  }
+  const M = live.materials;
+  $('prod-lines').innerHTML = '<tr><th>line</th><th>produced</th><th>OK</th><th>out of spec</th><th>bag lot now</th><th>tube reel now</th><th>last device</th></tr>' +
+    lines.map(l => { const P = PROD[l], u = P.units[P.units.length - 1];
+      return u ? `<tr><td><b>${l}</b></td><td>${fmt(P.units.length)}</td><td>${fmt(P.units.length - P.nokCum[P.units.length - 1])}</td><td>${P.nokCum[P.units.length - 1]}</td>
+        <td>${u.bag_lot}</td><td>${u.reel}</td><td>${u.unit_id}<br><span class="note">${u.time.replace('T', ' ').replace('Z', '')}</span></td></tr>`
+        : `<tr><td><b>${l}</b></td><td colspan="6" class="note">no devices yet</td></tr>`; }).join('');
+  const mat = (T, means, unit) => '<tr><th></th><th>devices</th><th>per line (ASM-0x)</th><th>first → last device</th><th>' + unit + '</th></tr>' +
+    Object.entries(T).sort((a, b) => a[0].localeCompare(b[0])).map(([k, e]) => `<tr class="${e.inUse.length ? 'hl' : ''}"><td><b>${k}</b>${e.inUse.length ? `<br><span class="pill ok">in use: ${e.inUse.join(', ')}</span>` : ''}</td>
+      <td>${fmt(e.n)}</td><td class="note">${Object.entries(e.lines).map(([l, c]) => `<span class="nw">${l.slice(4)}: ${c}</span>`).join(' · ')}</td><td class="note"><span class="nw">${e.first}</span> → <span class="nw">${e.last}</span></td>
+      <td>${means[k] != null ? means[k].toFixed(4) + '″' : '<span class="FAIL">no data</span>'}</td></tr>`).join('');
+  $('prod-bags').innerHTML = mat(bags, M.bag, 'port ID');
+  $('prod-reels').innerHTML = mat(reels, M.pvc, 'tube OD');
+  $('prod-note').innerHTML = `${fmt(lines.reduce((s, l) => s + PROD[l].units.length, 0))} feeding devices produced from ${Object.keys(bags).length} bag lots and ${Object.keys(reels).length} tube reels.
+    Highlighted rows are in use right now.`;
 }
 
 /* ------------------------------------------------------------------ DATA EXPLORER */

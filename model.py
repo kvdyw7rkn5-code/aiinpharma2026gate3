@@ -158,7 +158,8 @@ class LineMonitor:
         u = dict(event_no=event_no, unit_id=rec["unit_id"], time=rec["time"], depth=y, baseline=round(base, 4),
                  resid=round(resid, 4), cusum_pos=round(self.cp, 3), cusum_neg=round(self.cn, 3),
                  lsl=lsl, usl=usl, nok=nok, port_in=port, od_in=od, material_known=port_known and od_known,
-                 pressure=rec["pressure_bar"], actuator=rec["actuator_position_mm"],
+                 pressure=rec["pressure_bar"], bag_lot=rec["bag_lot_id"], reel=rec["reel_id"],
+                 actuator=rec["actuator_position_mm"],
                  follow_err=rec["axis_following_error_mm"], vision_offset=round(y - rec["actuator_position_mm"], 4))
         self.units.append(u)
         if nok and self.first_failure is None:
