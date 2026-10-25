@@ -136,25 +136,27 @@ PVC-01 measurements) and the assembly pressure. Each model is tested four ways:
 | M13 | Neural network (MLP 32-16) | ML, black box | Two hidden layers, about 740 weights with no physical meaning. |
 
 ### Results (RMSE in mm, lower is better)
-| # | Model | random | new lots | unseen setting | future | parameters | twin: failures caught early |
+| # | Model | random | new lots | unseen setting | future | parameters | twin: E ≤ 2 (median E) |
 |---|---|---|---|---|---|---|---|
-| M00 | Average only | 0.327 | 0.333 | 0.375 | 0.338 | 1 | 44 % + false alarm |
+| M00 | Average only | 0.327 | 0.333 | 0.375 | 0.338 | 1 | 17 % (7) + false alarm |
 | M01 | Gap only | 0.251 | 0.263 | 0.285 | 0.252 | 2 | |
 | M02 | Gap + pressure | 0.182 | 0.199 | 0.200 | 0.183 | 3 | |
-| **M03** | **Production linear** | **0.166** | **0.185** | **0.181** | **0.167** | **4** | **78 %** |
+| **M03** | **Production linear** | **0.166** | **0.185** | **0.181** | **0.167** | **4** | **33 % (2)** |
 | M04 | Linear + variation | 0.164 | 0.183 | 6.369 | 0.164 | 6 | |
-| M05 | Quadratic (ridge) | 0.160 | 0.179 | 4.475 | 0.162 | 11 | 78 % |
-| M06 | Lookup table | 0.160 | 0.180 | 0.375 | 0.163 | 27 | 78 % |
+| M05 | Quadratic (ridge) | 0.160 | 0.179 | 4.475 | 0.162 | 11 | 33 % (2) |
+| M06 | Lookup table | 0.160 | 0.180 | 0.375 | 0.163 | 27 | 33 % (2) |
 | M07 | Decision tree | 0.182 | 0.200 | 0.311 | 0.189 | 31 nodes | |
-| M08 | Random forest | 0.160 | 0.188 | 0.289 | 0.164 | ~101k nodes | 78 % |
-| M09 | Gradient boosting | 0.154 | 0.190 | 0.287 | 0.159 | ~4.5k nodes | 78 % |
+| M08 | Random forest | 0.160 | 0.188 | 0.289 | 0.164 | ~101k nodes | 39 % (2) |
+| M09 | Gradient boosting | 0.154 | 0.190 | 0.287 | 0.159 | ~4.5k nodes | 39 % (2) |
 | M10 | k-NN | 0.163 | 0.188 | 0.241 | 0.164 | 9,000 stored values | |
 | M11 | SVR | 0.162 | 0.189 | 0.298 | 0.164 | ~6.8k | |
 | M12 | Gaussian process | 0.160 | 0.179 | 0.176 | 0.162 | 5,400 stored values | |
-| M13 | Neural network | 0.176 | 0.218 | 5.290 | 0.178 | 737 weights | 83 % |
+| M13 | Neural network | 0.176 | 0.218 | 5.290 | 0.178 | 737 weights | 17 % (8) |
 
-"Twin" = the model plugged in as the digital twin's baseline, run on 18 synthetic de-calibration scenarios
-and on the stable 1,800-unit line.
+"Twin" = the model plugged in as the digital twin's baseline, run with the production commit rule
+(`holt_next`, L = 3) on 18 synthetic drift scenarios and on the stable 1,800-unit line.
+E ≤ 2 is the share of all scenarios where the locked prediction was within 2 units of the first failure;
+a failure before any lock counts as a miss.
 
 ### What the comparison shows
 1. **Machine learning barely helps on familiar settings.** The best ML model (gradient boosting, 0.154 mm)
@@ -165,9 +167,11 @@ and on the stable 1,800-unit line.
    (4.5–6.4 mm) break down, because they rely on lot spread. In this experiment, spread is tied to the
    material level, so it stops making sense outside the training range (see permutation importance:
    for M13, shuffling the port spread costs 2.8 mm). Only M03 and the Gaussian process stay accurate.
-3. **Inside the twin, the model choice barely matters.** Every real model catches 78–83 % of failures early.
-   The average-only model shows that a material/pressure baseline *is* needed: without it the twin catches
-   only 44 % and raises a false alarm.
+3. **Inside the twin, the model choice barely matters.** Every real model that uses port, OD and pressure
+   predicts 33–39 % of failures within 2 units, with a median error of 2. Forests and boosting gain one scenario
+   out of 18 (39 % vs 33 %), which is within noise for such a small test. The neural network falls to 17 %.
+   The average-only model shows that a material/pressure baseline *is* needed: without it the twin is
+   inaccurate (17 %, median error 7) and raises a false alarm on the stable line.
 4. **Why ML is a hard sell under GxP.** The 4 coefficients can be checked by hand and have a physical meaning.
    ML models are GAMP 5 category 5 software, need ongoing monitoring for model drift, and cannot be explained
    to an inspector. Actuator position would predict depth almost perfectly (R² 0.98), but it is recorded

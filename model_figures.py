@@ -53,33 +53,36 @@ def accuracy(rep, path):
 
 
 def twin(rep, path):
+    """Jury metric per baseline model: share of scenarios with E = |Z - X| <= 2 (a miss counts as a fail)."""
     names = {m["key"]: m["name"] for m in rep["models"]}
-    rows = sorted(rep["twin"].items(), key=lambda kv: kv[1]["caught_in_advance_%"])
-    fig, ax = plt.subplots(figsize=(10, 4.2))
+    rows = sorted(rep["twin"].items(), key=lambda kv: (kv[1]["E<=2_%"], kv[0] == "M03"))
+    fig, ax = plt.subplots(figsize=(12, 4.4))
     for i, (k, v) in enumerate(rows):
-        ax.barh(i, v["caught_in_advance_%"], height=0.6, color=S1 if k == "M03" else "#9ec5f4")
+        ax.barh(i, v["E<=2_%"], height=0.6, color=S1 if k == "M03" else "#9ec5f4")
         fa = "  ·  FALSE ALARM on stable line" if v["false_prediction_on_stable_line"] else ""
-        ax.text(v["caught_in_advance_%"] + 1, i, f"{v['caught_in_advance_%']:.0f} %  ·  median {v['median_units_early']:.0f} units early{fa}",
+        med = f"median E {v['median_E']:.0f}" if v.get("median_E") is not None else "no lock"
+        ax.text(v["E<=2_%"] + 1, i, f"{v['E<=2_%']:.0f} %  ·  {med}  ·  {v['caught_in_advance_%']:.0f} % locked before failure{fa}",
                 va="center", color=INK, fontsize=9)
     ax.set_yticks(range(len(rows)))
     ax.set_yticklabels([f"{k}  {names[k]}" for k, _ in rows])
     for t, (k, _) in zip(ax.get_yticklabels(), rows):
         if k == "M03":
             t.set_fontweight("bold")
-    ax.set_xlim(0, 135)
-    ax.set_xticks([0, 25, 50, 75, 100])
-    ax.set_xlabel("failures predicted before they happened (%)")
+    ax.set_xlim(0, 110)
+    ax.set_xticks([0, 10, 20, 30, 40, 50])
+    ax.set_xlabel("scenarios predicted within 2 units (E = |Z − X| ≤ 2, %)")
     ax.grid(axis="x", color=GRID, lw=0.8)
     ax.set_axisbelow(True)
     for s in ("top", "right", "left"):
         ax.spines[s].set_visible(False)
     ax.tick_params(length=0)
-    n = next(iter(rep["twin"].values()))["scenarios"]
-    fig.suptitle("Inside the digital twin, the choice of model barely changes the outcome",
+    v0 = next(iter(rep["twin"].values()))
+    fig.suptitle("Inside the digital twin, any baseline that uses port, OD and pressure scores about the same",
                  x=0.01, ha="left", fontsize=13, color=INK)
-    fig.text(0.01, 0.01, f"Each model used as the twin's baseline on {n} synthetic de-calibration scenarios "
-             "+ the stable 1,800-unit line.", color=INK2, fontsize=8.5)
-    fig.tight_layout(rect=(0, 0.03, 1, 0.95))
+    fig.text(0.01, 0.01, f"Each model used as the twin's baseline on {v0['scenarios']} synthetic drift scenarios + the stable "
+             f"1,800-unit line. Commit rule '{v0.get('estimator', '')}', lead L = X − Y = {v0.get('mean_L') or '-'} units.",
+             color=INK2, fontsize=8.5)
+    fig.tight_layout(rect=(0, 0.04, 1, 0.95))
     fig.savefig(path, dpi=200)
     plt.close(fig)
 

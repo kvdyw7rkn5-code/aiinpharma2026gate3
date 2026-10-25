@@ -5,3 +5,4 @@ export_*.jsonl
 run_*.log
 analysis_*.json
 .DS_Store
+dashboard_*.log
