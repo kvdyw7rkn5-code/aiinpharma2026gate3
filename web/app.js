@@ -172,7 +172,7 @@ async function renderHow() {
        showme('Model lab › where each model predicts the failure', 'lab', 'l-run')]],
     'URS-DI-004': ['Each unit record names its bag lot and tube reel, which link to their BAG-01 / PVC-01 measurements; predictions and inspection results are stored with line and Unit ID.',
       [showme('Audit trail › full chain for a unit', 'audit', 'trace-chain', anyUnit), showme('Data explorer › traceability checks', 'data', 'd-checks')]],
-    'URS-DI-005': ['One append-only database file that survives restarts; the monitor resumes from it. This site opens it read-only and offers lookup, browsing, re-verification and a full export.',
+    'URS-DI-005': ['One append-only PostgreSQL ledger whose data volume survives restarts; the monitor resumes from it. This site connects with a read-only role and offers lookup, browsing, re-verification and a full export.',
       [showme('Audit trail › ledger browser', 'audit', 'ledger-card'), showme('Audit trail › verify and download export', 'audit', 'verify-card'),
        showme('Header › number of stored records', 'live', 'hdr-pills')]],
   };

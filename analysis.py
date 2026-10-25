@@ -4,14 +4,13 @@ Works only on records stored in the ledger (the GxP copy of what the REST API re
 """
 import argparse
 import json
-import os
 from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
 
 from model import LineMonitor, MaterialBook, baseline
-from store import Ledger
+from store import Ledger, ledger_exists
 
 SPEC = {"port_id_in": (0.173, 0.176), "outer_diameter_in": (0.1675, 0.1725), "inner_diameter_in": (0.110, 0.122),
         "wall_thickness_in": (0.025, 0.028), "wall_difference_in": (None, 0.003)}
@@ -51,7 +50,7 @@ def _timing(df, name):
             "backward_steps_in_source_order": int((dt < 0).sum())}
 
 
-def analyze(db, mode, sim_db="ledger_SIM.db"):
+def analyze(db, mode, sim_db="SIM"):
     led = Ledger(db, readonly=True)
     ok, n_entries, problem = led.verify()
     models = led.rows(kind="MODEL")
@@ -172,7 +171,7 @@ def analyze(db, mode, sim_db="ledger_SIM.db"):
 
     out["checks"].append(("Ledger hash chain", "PASS" if ok else "FAIL", f"{n_entries} entries" + (f" - {problem}" if problem else "")))
     out["total_timestamps"] = sum(x["records"] for x in out["timing"])
-    out["sim"] = _sim_failures(sim_db) if os.path.exists(sim_db) and mode != "SIM" else None
+    out["sim"] = _sim_failures(sim_db) if ledger_exists(sim_db) and mode != "SIM" else None
     return out
 
 
@@ -201,7 +200,7 @@ if __name__ == "__main__":
     ap.add_argument("--mode", default="HISTORICAL")
     ap.add_argument("--db")
     a = ap.parse_args()
-    res = analyze(a.db or f"ledger_{a.mode}.db", a.mode)
+    res = analyze(a.db or a.mode, a.mode)
     json.dump(res, open(f"analysis_{a.mode}.json", "w"), default=lambda o: o.item() if hasattr(o, "item") else str(o))
     print("total timestamps:", res["total_timestamps"])
     for t in res["timing"]:

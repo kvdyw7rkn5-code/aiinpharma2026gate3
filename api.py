@@ -91,14 +91,13 @@ class SimulatorClient:
             time.sleep(pause)
 
     def _store(self, kind, line, start, records):
-        stored = []
+        """All records of one response go into the ledger in one transaction."""
+        entries = [dict(kind=kind, record_uid=f"{self.mode}/{line}/{start + i:06d}", payload=rec, mode=self.mode,
+                        line_id=line, event_no=start + i, unit_id=rec.get("unit_id"), source_time=rec.get("time"))
+                   for i, rec in enumerate(records)]
         with self.lock:
-            for i, rec in enumerate(records):
-                n = start + i
-                e = self.ledger.append(kind, f"{self.mode}/{line}/{n:06d}", rec, mode=self.mode, line_id=line,
-                                       event_no=n, unit_id=rec.get("unit_id"), source_time=rec.get("time"))
-                stored.append((n, rec, e is not None))
-        return stored
+            stored = self.ledger.append_many(entries)
+        return [(start + i, rec, e is not None) for i, (rec, e) in enumerate(zip(records, stored))]
 
     def fetch_component(self, line, start=1):
         """Fetch all remaining BAG-01 / PVC-01 records from row `start` (stateless, paged by 100)."""

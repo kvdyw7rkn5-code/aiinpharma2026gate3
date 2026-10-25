@@ -7,3 +7,4 @@ analysis_*.json
 .DS_Store
 dashboard_*.log
 *.db.lock
+mock.log

@@ -1,0 +1,31 @@
+# GxP ledger database for the Gate 3 digital twin.
+#   docker compose up -d        -> PostgreSQL 16 on 127.0.0.1:55432 (data in volume gate3_pgdata)
+# Roles (created by db/init.sql on first start):
+#   gate3_owner  creates ledger schemas (admin only)
+#   twin_app     monitor: INSERT + SELECT only, no UPDATE / DELETE / TRUNCATE / DDL
+#   twin_reader  dashboard, analysis, lab: SELECT only
+# The passwords below are for the local demo database only; override them with environment variables.
+services:
+  ledger-db:
+    image: postgres:16
+    container_name: gate3-ledger
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: gate3
+      POSTGRES_USER: gate3_owner
+      POSTGRES_PASSWORD: ${GATE3_OWNER_PASSWORD:-owner-demo}
+      TWIN_APP_PASSWORD: ${GATE3_APP_PASSWORD:-app-demo}
+      TWIN_READER_PASSWORD: ${GATE3_READER_PASSWORD:-reader-demo}
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - gate3_pgdata:/var/lib/postgresql/data
+      - ./db/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gate3_owner -d gate3"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  gate3_pgdata:

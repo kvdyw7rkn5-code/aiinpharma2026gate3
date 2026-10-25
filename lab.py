@@ -10,7 +10,6 @@ so lab experiments cannot affect GxP records or the frozen production model.
 """
 import copy
 import json
-import os
 import threading
 
 import numpy as np
@@ -19,7 +18,7 @@ from sklearn.model_selection import KFold
 import models as M
 from model import LineMonitor, MaterialBook, baseline
 from sim import decalibrate
-from store import Ledger
+from store import Ledger, ledger_exists
 
 LINES = ("ASM-01", "ASM-02", "ASM-03")
 FROZEN = "M03F"
@@ -69,10 +68,9 @@ _cache, _lock = {}, threading.Lock()
 
 
 def _ledger_records(mode):
-    path = f"ledger_{mode}.db"
-    if not os.path.exists(path):
+    if not ledger_exists(mode):
         return None
-    led = Ledger(path, readonly=True)
+    led = Ledger(mode, readonly=True)
     rec = {k: [json.loads(r["payload"]) for r in led.rows(kind=k, mode=mode)] for k in ("BAG", "PVC")}
     rec["ASM"] = {l: [json.loads(r["payload"]) for r in led.rows(kind="ASM", mode=mode, line_id=l)] for l in LINES}
     return rec

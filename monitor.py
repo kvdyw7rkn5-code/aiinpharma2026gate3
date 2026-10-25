@@ -7,14 +7,13 @@
 The access code is used only in the request URL; it is never written to the ledger.
 """
 import argparse
-import fcntl
 import json
 import threading
 import time
 
 from api import ASM_LINES, DEFAULT_BASE, FatalAPIError, SimulatorClient
 from model import LineMonitor, MaterialBook, next_unit_id
-from store import Ledger, utc_now
+from store import Ledger, MemoryLedger, claim_writer, reset_ledger, utc_now
 
 REQUIRED = ("line_id", "unit_id", "time", "bag_lot_id", "tubing_lot_id", "reel_id", "pressure_bar",
             "insertion_speed_mm_s", "insertion_target_cm", "actuator_position_mm",
@@ -149,7 +148,7 @@ def run_rest(args, ledger, model):
         n = 0
         for comp, kind in (("BAG-01", "BAG"), ("PVC-01", "PVC")):
             with lock:
-                start = 1 + max([r["event_no"] for r in ledger.rows(kind=kind, mode=args.mode)], default=0)
+                start = 1 + ledger.max_event_no(kind, args.mode)
             new = client.fetch_component(comp, start)
             with lock:
                 for _, rec, _ in new:
@@ -244,8 +243,7 @@ def run_rest(args, ledger, model):
 
 def preflight(args):
     """Connectivity check that only reads BAG-01 / PVC-01 (never consumes assembly data)."""
-    from store import Ledger as _L
-    led = _L(":memory:")
+    led = MemoryLedger()   # the check stores nothing in the GxP ledger
     c = SimulatorClient(led, args.mode, args.team, args.code, base=args.base_url, retries=3, wait_unloaded=0)
     print(f"checking {args.base_url} mode {args.mode} team {args.team} (the first call can take up to a minute)")
     try:
@@ -261,8 +259,10 @@ def run_sim(args, ledger, model):
     hist = json.load(open("data_hist/ASM-01.json"))
     twin = Twin(ledger, model, "SIM", list(ASM_LINES))
     for kind, f in (("BAG", "BAG-01"), ("PVC", "PVC-01")):
-        for i, rec in enumerate(json.load(open(f"data_hist/{f}.json")), 1):
-            ledger.append(kind, f"SIM/{f}/{i:06d}", rec, mode="SIM", line_id=f, event_no=i, source_time=rec["time"])
+        recs = json.load(open(f"data_hist/{f}.json"))
+        ledger.append_many([dict(kind=kind, record_uid=f"SIM/{f}/{i:06d}", payload=rec, mode="SIM", line_id=f,
+                                 event_no=i, source_time=rec["time"]) for i, rec in enumerate(recs, 1)])
+        for rec in recs:
             twin.add_component(kind, rec)
     streams = {"ASM-01": decalibrate(hist, "ASM-01", "SIM_A", 150, 0.010, "axis", 400, seed=1),
                "ASM-02": decalibrate(hist, "ASM-02", "SIM_B", 100, -0.015, "vision", 400, seed=2),
@@ -285,7 +285,8 @@ if __name__ == "__main__":
     ap.add_argument("--mode", choices=["HISTORICAL", "REALTIME", "SIM"], required=True)
     ap.add_argument("--team", default="01")
     ap.add_argument("--code", help="team access code (required for HISTORICAL / REALTIME; never stored)")
-    ap.add_argument("--db", default=None, help="ledger file (default: ledger_<MODE>.db)")
+    ap.add_argument("--db", default=None, help="ledger name (default: the mode); PostgreSQL schema ledger_<name>")
+    ap.add_argument("--fresh", action="store_true", help="SIM only: drop and recreate the SIM ledger first")
     ap.add_argument("--lines", nargs="+", default=list(ASM_LINES))
     ap.add_argument("--limit", type=int, default=5, help="max records per assembly request while a line is healthy "
                                                           "(REALTIME 1-5, HISTORICAL 1-100); drops to 1 near a failure")
@@ -308,14 +309,17 @@ if __name__ == "__main__":
         raise SystemExit
 
     model = json.load(open("model.json"))
-    db_path = args.db or f"ledger_{args.mode}.db"
-    # only one monitor may write a ledger at a time (a second terminal would otherwise race it)
-    lock_file = open(db_path + ".lock", "w")
-    try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        raise SystemExit(f"Another monitor is already writing {db_path}. Stop it first (Ctrl+C in its terminal).")
-    ledger = Ledger(db_path, actor=args.operator)
+    name = args.db or args.mode
+    # only one monitor may write a ledger at a time (a second terminal would otherwise race it);
+    # PostgreSQL advisory lock, so it works on Windows too and is taken before --fresh can drop anything
+    writer = claim_writer(name)
+    if writer is None:
+        raise SystemExit(f"Another monitor is already writing the {name} ledger. Stop it first (Ctrl+C in its terminal).")
+    if args.fresh:
+        if args.mode != "SIM":
+            ap.error("--fresh is only allowed for SIM (real ledgers are never dropped)")
+        reset_ledger(name)
+    ledger = Ledger(name, actor=args.operator)
     ledger.append("SESSION", f"SESSION/{utc_now()}", {"mode": args.mode, "team": args.team, "lines": args.lines,
                                                       "model_version": model["version"], "limit": args.limit,
                                                       "slow_at": args.slow_at, "base_url": args.base_url},

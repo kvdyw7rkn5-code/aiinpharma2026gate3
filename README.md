@@ -3,6 +3,13 @@
 Scoring and event rules we must follow: [`RULES.md`](RULES.md).
 
 ## Run
+The ledger is PostgreSQL 16 in Docker (Docker Desktop must be running):
+```bash
+docker compose up -d                   # PostgreSQL on 127.0.0.1:55432, roles gate3_owner / twin_app / twin_reader
+pip install -r requirements.txt
+python3 store.py list                  # ledgers (one schema per mode) and entry counts
+python3 monitor.py --mode SIM --fresh  # --fresh drops and recreates the SIM ledger (refused for REALTIME)
+```
 ```bash
 python3 model.py                       # fit + freeze the white-box baseline on HISTORICAL data -> model.json
 python3 validate.py                    # OQ: both commit rules on E/L, false alarms, data-integrity tests
@@ -67,11 +74,13 @@ What the monitor does for you:
 
 ## Rehearse with the fake simulator (`mock_server.py`)
 ```bash
-python3 mock_server.py                     # http://localhost:8090, REALTIME passcode "LIVE"
-python3 dashboard.py --mode REALTIME --db rehearsal.db
-python3 monitor.py --mode REALTIME --team 01 --code LIVE --base-url http://localhost:8090/simulator --db rehearsal.db
-curl localhost:8090/mock/truth             # answer key: scenario and first failure per line
+python3 mock_server.py                     # http://127.0.0.1:8090, REALTIME passcode "LIVE"
+python3 store.py reset REHEARSAL           # empty rehearsal ledger (never use REALTIME for rehearsals)
+python3 dashboard.py --mode REALTIME --db REHEARSAL
+python3 monitor.py --mode REALTIME --team 01 --code LIVE --base-url http://127.0.0.1:8090/simulator --db REHEARSAL
+curl 127.0.0.1:8090/mock/truth             # answer key: scenario and first failure per line
 ```
+Use `127.0.0.1`, not `localhost`: on Windows `localhost` tries IPv6 first and every request to the mock then waits about 2 s.
 The mock uses the same URLs and rules as the real simulator: 1–5 records per REALTIME request, 503 before data is
 loaded, `[]` past the end, 404 for a wrong team or passcode. Its data is semi-random but physically consistent: new
 bag lots and tube reels, and lines that hold a lot or reel for a realistic run of devices. Every line gets its own
@@ -258,9 +267,12 @@ predictions of the synthetic runs, each locked before the predicted unit arrived
 | DI-002 | every REST body is stored verbatim (`RAW_RESPONSE`) before parsing; source timestamps are never changed |
 | DI-003 | `PREDICTION` entry: line, predicted unit, current unit, UTC timestamp, model version, evidence |
 | DI-004 | each unit links to bag lot/reel → BAG/PVC records, the prediction and the `EVALUATION` |
-| DI-005 | SQLite ledger + JSONL export, read-only dashboard |
+| DI-005 | PostgreSQL ledger (persistent volume) + JSONL export, read-only dashboard role |
 
-- Append-only: DB triggers block UPDATE/DELETE. A SHA-256 hash chain detects any edit made outside the app.
+- Append-only, enforced three times: the monitor's role `twin_app` has only INSERT + SELECT (no UPDATE / DELETE /
+  TRUNCATE / DDL); triggers block UPDATE / DELETE / TRUNCATE even for the schema owner; a SHA-256 hash chain
+  detects any edit made by bypassing both. The dashboard, analysis and lab use `twin_reader` (SELECT only).
+- Concurrent writers are serialised per ledger by an advisory lock, so the chain never forks (tested with 10 writers).
 - One prediction per line (UNIQUE key). It can never be changed after it is committed.
 - The access code is never stored. The model is versioned by hash and linked to the hashes of its training files.
 - SIM (synthetic) data is kept separate by mode and never mixed with REST data.

@@ -10,7 +10,7 @@ Serves the web app in web/ (index.html, app.css, app.js) and these JSON endpoint
   /api/unit?id=...    end-to-end trace of one unit (record, raw response, bag lot, reel, prediction, result)
   /api/ledger         ledger browser · /api/verify re-checks the hash chain · /api/export downloads it all
 
-The dashboard opens the ledger with SQLite mode=ro, so it can never change records (URS-DI-005).
+The dashboard connects as twin_reader in read-only transactions, so it can never change records (URS-DI-005).
 All derived values shown are recomputed from the stored original records with the frozen model.
 """
 import argparse
@@ -26,7 +26,7 @@ import audit
 import lab
 from analysis import analyze
 from model import LineMonitor, MaterialBook
-from store import Ledger
+from store import Ledger, ledger_exists
 
 LINES = ("ASM-01", "ASM-02", "ASM-03")
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -55,19 +55,19 @@ class LiveState:
         self.pred, self.eval, self.alerts = {}, {}, []
 
     def current_tip(self):
-        return self.led.db.execute("SELECT coalesce(max(seq), 0) FROM ledger").fetchone()[0]
+        return self.led.tip()
 
     def get(self):
         with self.lock:
             if self.led is None:
-                if not os.path.exists(self.db):
+                if not ledger_exists(self.db):
                     return 0, _gz(self._build(True, 0, None, 0) | {"waiting": True})
                 self.led = Ledger(self.db, readonly=True)
             tip = self.current_tip()
             if tip == self.tip:
                 return tip, self.body
-            for r in self.led.db.execute("SELECT * FROM ledger WHERE seq > ? ORDER BY seq", (self.seq,)):
-                self._apply(dict(r))
+            for r in self.led.rows_after(self.seq):
+                self._apply(r)
                 self.seq = r["seq"]
             ok, n, problem = self.led.verify()
             self.tip, self.body = tip, _gz(self._build(ok, n, problem, tip))
@@ -124,10 +124,9 @@ WAITING = "No data yet. Start the monitor (python3 monitor.py --mode {mode} ...)
 
 
 def analysis_cached(db, mode):
-    if not os.path.exists(db):
+    if not ledger_exists(db):
         return _gz({"error": WAITING.format(mode=mode), "waiting": True})
-    with Ledger(db, readonly=True).db as c:
-        tip = c.execute("SELECT max(seq) FROM ledger").fetchone()[0]
+    tip = Ledger(db, readonly=True).tip()
     if _ANA_CACHE.get("key") != (db, mode, tip):
         try:
             _ANA_CACHE.update(key=(db, mode, tip), value=_gz(analyze(db, mode)))
@@ -151,7 +150,7 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         gz, ctype, cache = True, "application/json", "no-store"
         needs_ledger = url.path in ("/api/urs", "/api/unit", "/api/quickunits", "/api/ledger", "/api/verify", "/api/export")
-        if needs_ledger and not os.path.exists(self.server.db):
+        if needs_ledger and not ledger_exists(self.server.db):
             body = _gz({"error": WAITING.format(mode=self.server.mode), "waiting": True})
         elif url.path == "/api/state":
             tip, body = self.server.live.get()
@@ -228,11 +227,11 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--mode", default="REALTIME", choices=["HISTORICAL", "REALTIME", "SIM"])
-    ap.add_argument("--db")
+    ap.add_argument("--db", help="ledger name (default: the mode)")
     ap.add_argument("--port", type=int, default=8050)
     a = ap.parse_args()
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
-    srv.db, srv.mode = a.db or f"ledger_{a.mode}.db", a.mode
+    srv.db, srv.mode = a.db or a.mode, a.mode
     srv.live = LiveState(srv.db, a.mode)
     # warm the caches in the background so the first click on every tab is instant
     threading.Thread(target=lambda: (srv.live.get(), analysis_cached(srv.db, a.mode)), daemon=True).start()

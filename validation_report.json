@@ -105,8 +105,13 @@
     }
   },
   "part3": {
-    "update_blocked": true,
-    "delete_blocked": true,
+    "update_blocked_for_app_role": true,
+    "update_blocked_for_owner_by_trigger": true,
+    "delete_blocked_for_app_role": true,
+    "delete_blocked_for_owner_by_trigger": true,
+    "truncate_blocked_for_app_role": true,
+    "truncate_blocked_for_owner_by_trigger": true,
+    "reader_cannot_insert": true,
     "duplicate_not_overwritten": true,
     "prediction_immutable": true,
     "chain_verifies": true,

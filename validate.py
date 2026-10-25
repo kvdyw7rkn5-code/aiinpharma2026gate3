@@ -6,27 +6,28 @@ Part 1  prediction performance on SYNTHETIC de-calibration scenarios (historical
         "quantile" (5 % quantile of the forecast first failure, within `horizon` units) and
         "holt_next" (P(next unit fails) from Holt smoothing >= p_next_commit, X = Y + lead_units).
 Part 2  false alarms on the unmodified HISTORICAL line (no failures -> no prediction expected)
-Part 3  data-integrity tests: append-only, tamper detection, duplicate handling, immutable prediction
+Part 3  data-integrity tests on PostgreSQL: role privileges, append-only triggers, tamper detection,
+        duplicate handling, immutable prediction
 """
 import copy
 import itertools
 import json
 import os
-import sqlite3
 import sys
-import tempfile
+
+import psycopg
 
 from model import MaterialBook
 from monitor import Twin
 from sim import decalibrate, first_failure
-from store import Ledger
+from store import Ledger, MemoryLedger, connect, reset_ledger
 
 MODEL = json.load(open("model.json"))
 HIST = {n: json.load(open(f"data_hist/{n}.json")) for n in ("ASM-01", "PVC-01", "BAG-01")}
 
 
 def run_stream(recs, model, line="ASM-01"):
-    led = Ledger(":memory:")
+    led = MemoryLedger()   # scenario replays are scratch work, not manufacturing records
     twin = Twin(led, model, "TEST", [line], log=lambda *_: None)
     for r in HIST["BAG-01"]:
         twin.add_component("BAG", r)
@@ -98,28 +99,41 @@ def part2(model):
 
 
 def part3():
+    """Integrity tests on a throw-away PostgreSQL ledger, through the same roles the system uses."""
     tests = {}
-    path = os.path.join(tempfile.mkdtemp(), "t.db")
-    led = Ledger(path)
+    name = f"TEST_{os.getpid()}"
+    reset_ledger(name)
+    led = Ledger(name)                                       # twin_app: INSERT + SELECT only
     led.append("ASM", "TEST/ASM-01/000001", HIST["ASM-01"][0], line_id="ASM-01", event_no=1)
     led.append("PREDICTION", "PRED/TEST/ASM-01", {"predicted_unit_id": "X1"}, line_id="ASM-01")
-    for sql, name in (("UPDATE ledger SET payload='{}' WHERE seq=1", "update_blocked"),
-                      ("DELETE FROM ledger WHERE seq=1", "delete_blocked")):
-        try:
-            led.db.execute(sql)
-            tests[name] = False
-        except sqlite3.DatabaseError:
-            tests[name] = True
+    t = led._t
+
+    def blocked(role, sql):
+        with connect(role) as c:
+            try:
+                c.execute(sql)
+                return False
+            except psycopg.Error:
+                return True
+
+    for verb, sql in (("update", f"UPDATE {t} SET payload='{{}}' WHERE seq=1"),
+                      ("delete", f"DELETE FROM {t} WHERE seq=1"), ("truncate", f"TRUNCATE {t}")):
+        tests[f"{verb}_blocked_for_app_role"] = blocked("app", sql)        # no privilege
+        tests[f"{verb}_blocked_for_owner_by_trigger"] = blocked("owner", sql)  # trigger
+    tests["reader_cannot_insert"] = blocked("reader", f"INSERT INTO {t} (seq) VALUES (99)")
     tests["duplicate_not_overwritten"] = led.append("ASM", "TEST/ASM-01/000001", {"tampered": 1}) is None
     tests["prediction_immutable"] = led.append("PREDICTION", "PRED/TEST/ASM-01", {"predicted_unit_id": "X2"}) is None
     tests["chain_verifies"] = led.verify()[0]
-    # attacker bypasses the triggers on the file directly -> hash chain must catch it
-    raw = sqlite3.connect(path)
-    raw.execute("DROP TRIGGER no_update")
-    raw.execute("UPDATE ledger SET payload=replace(payload,'16.418','15.000') WHERE seq=1")
-    raw.commit()
-    ok, _, problem = Ledger(path).verify()
+    # A database administrator disables the trigger and edits a value -> the hash chain must catch it
+    with connect("owner") as c:
+        c.execute(f"ALTER TABLE {t} DISABLE TRIGGER no_update_delete")
+        c.execute(f"UPDATE {t} SET payload=replace(payload,'16.418','15.000') WHERE seq=1")
+        c.execute(f"ALTER TABLE {t} ENABLE TRIGGER no_update_delete")
+    ok, _, problem = Ledger(name, readonly=True).verify()
     tests["tamper_detected"] = (not ok) and "payload altered" in problem
+    led.db.close()
+    with connect("owner") as c:
+        c.execute(f"DROP SCHEMA {led.schema} CASCADE")
     return tests
 
 
