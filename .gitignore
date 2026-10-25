@@ -1,0 +1,7 @@
+__pycache__/
+*.db
+*.db-journal
+export_*.jsonl
+run_*.log
+analysis_*.json
+.DS_Store

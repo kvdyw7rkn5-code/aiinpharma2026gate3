@@ -1,0 +1,27 @@
+{
+  "model_version": "BL-81e6834c473f",
+  "part1": [
+    {
+      "horizon": 3,
+      "scenarios": 80,
+      "exact_hit_%": 5.0,
+      "within_2_units_%": 15.0,
+      "within_5_units_%": 22.5,
+      "missed_%": 25.0,
+      "median_abs_err": 9
+    }
+  ],
+  "part2": {
+    "units": 1800,
+    "false_predictions": 0,
+    "failures": 0
+  },
+  "part3": {
+    "update_blocked": true,
+    "delete_blocked": true,
+    "duplicate_not_overwritten": true,
+    "prediction_immutable": true,
+    "chain_verifies": true,
+    "tamper_detected": true
+  }
+}

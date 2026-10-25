@@ -1,0 +1,35 @@
+{
+  "name": "baseline_depth_linear",
+  "formula": "depth_mm = c0 + c_port*port_thou + c_od*od_thou + c_p*pressure_bar",
+  "coef": {
+    "c0": -9.644353,
+    "c_port": 0.260213,
+    "c_od": -0.125863,
+    "c_p": 0.422163
+  },
+  "sigma_mm": 0.165521,
+  "r2": 0.7445,
+  "n_train": 1800,
+  "pop_port_in": 0.174333,
+  "pop_od_in": 0.17,
+  "detector": {
+    "window": 30,
+    "min_points": 12,
+    "max_segment": 120,
+    "t_alarm": 3.0,
+    "cusum_k": 0.5,
+    "cusum_h": 5.0,
+    "persist_units": 3,
+    "horizon_units": 3,
+    "p_next_commit": 0.5,
+    "estimator": "quantile",
+    "quantile": 0.05,
+    "max_lookahead": 300
+  },
+  "training_data_sha256": {
+    "ASM-01": "22c63fbacf31a0933d07632a64f576003cab5ce97c652351e05aa0231272ff1b",
+    "PVC-01": "35802f3eda0be9bd26e5d6c5c6771a2283d9d231941bce2841b828099ca62ab0",
+    "BAG-01": "5a5f1c10540c94eba44083995e1023597bc7413109f40f950c31dc3bbae0a149"
+  },
+  "version": "BL-81e6834c473f"
+}
