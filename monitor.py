@@ -7,16 +7,20 @@
 The access code is used only in the request URL; it is never written to the ledger.
 """
 import argparse
+import fcntl
 import json
+import threading
 import time
 
-from api import ASM_LINES, SimulatorClient
+from api import ASM_LINES, DEFAULT_BASE, FatalAPIError, SimulatorClient
 from model import LineMonitor, MaterialBook, next_unit_id
 from store import Ledger, utc_now
 
 REQUIRED = ("line_id", "unit_id", "time", "bag_lot_id", "tubing_lot_id", "reel_id", "pressure_bar",
             "insertion_speed_mm_s", "insertion_target_cm", "actuator_position_mm",
             "axis_following_error_mm", "visual_inspection_mm")
+NUMERIC = ("pressure_bar", "insertion_speed_mm_s", "insertion_target_cm", "actuator_position_mm",
+           "axis_following_error_mm", "visual_inspection_mm")
 
 
 class Twin:
@@ -32,9 +36,12 @@ class Twin:
     def add_component(self, kind, rec):
         (self.book.add_bag if kind == "BAG" else self.book.add_pvc)(rec)
 
-    def add_unit(self, line, event_no, rec):
+    def add_unit(self, line, event_no, rec, allow_commit=True):
+        """Process one completed unit. allow_commit=False inside a batch: a prediction may only be locked
+        after the last unit of a batch, so the predicted unit can never be one we have already received."""
         mon = self.mon[line]
-        self._data_checks(line, event_no, rec, mon)
+        if not self._data_checks(line, event_no, rec, mon):
+            return None                    # stored as received, flagged, but not used for prediction
         u = mon.process(rec, event_no, self.book)
         if not u["material_known"]:
             self._alert(line, event_no, "MATERIAL_UNKNOWN",
@@ -46,14 +53,19 @@ class Twin:
                         f"slope {f['slope_mm_per_unit']:+.4f} mm/unit (t={f['t_slope']}), "
                         f"CUSUM+ {u['cusum_pos']} / CUSUM- {u['cusum_neg']}")
         self._evaluate(line, u)
-        if line not in self.done:
+        if line not in self.done and allow_commit:
             self._maybe_commit(line, u)
         return u
 
     def _data_checks(self, line, event_no, rec, mon):
         missing = [k for k in REQUIRED if rec.get(k) is None]
         if missing:
-            self._alert(line, event_no, "DATA_INCOMPLETE", f"missing {missing}")
+            self._alert(line, event_no, "DATA_INCOMPLETE", f"missing {missing}; unit kept in the ledger but not used")
+            return False
+        bad = [k for k in NUMERIC if not isinstance(rec.get(k), (int, float)) or isinstance(rec.get(k), bool)]
+        if bad:
+            self._alert(line, event_no, "DATA_INVALID", f"not a number: {bad}; unit kept in the ledger but not used")
+            return False
         if rec.get("line_id") != line:
             self._alert(line, event_no, "LINE_MISMATCH", f"record says {rec.get('line_id')}")
         if mon.units:
@@ -63,6 +75,7 @@ class Twin:
             if next_unit_id(prev["unit_id"], 1) != rec["unit_id"]:
                 self._alert(line, event_no, "UNIT_SEQUENCE_GAP",
                             f"expected {next_unit_id(prev['unit_id'], 1)}, got {rec['unit_id']}")
+        return True
 
     def _alert(self, line, event_no, code, text):
         self.ledger.append("ALERT", f"ALERT/{self.mode}/{line}/{event_no:06d}/{code}",
@@ -121,54 +134,126 @@ class Twin:
 
 
 def run_rest(args, ledger, model):
-    client = SimulatorClient(ledger, args.mode, args.team, args.code)
+    """Pull every assembly line from the REST API until its first failure (or the end of the data).
+
+    Lines run in parallel threads; network calls happen outside the shared lock, all processing and
+    ledger writes inside it. Batch size adapts per line: up to --limit records while the line is healthy,
+    1 record as soon as the risk of a failure rises (--slow-at) or a drift alarm is active, so that a
+    prediction can be locked one unit at a time close to the failure. Predictions are only allowed after
+    the last record of a batch, so the predicted unit is always one that has not been received yet."""
+    lock = threading.RLock()
+    client = SimulatorClient(ledger, args.mode, args.team, args.code, base=args.base_url, lock=lock)
     twin = Twin(ledger, model, args.mode, args.lines)
-    # resume: rebuild state from what is already in the ledger (no replay in REALTIME)
+
+    def refresh_materials():
+        n = 0
+        for comp, kind in (("BAG-01", "BAG"), ("PVC-01", "PVC")):
+            with lock:
+                start = 1 + max([r["event_no"] for r in ledger.rows(kind=kind, mode=args.mode)], default=0)
+            new = client.fetch_component(comp, start)
+            with lock:
+                for _, rec, _ in new:
+                    twin.add_component(kind, rec)
+            n += len(new)
+        return n
+
+    # resume: rebuild state from what is already in the ledger, then fetch new material data
     for kind in ("BAG", "PVC"):
         for r in ledger.rows(kind=kind, mode=args.mode):
             twin.add_component(kind, json.loads(r["payload"]))
+    print(f"materials: {refresh_materials()} new records -> {len(twin.book.port)} bag lots, {len(twin.book.od)} reels")
     next_row = {}
-    for comp, kind in (("BAG-01", "BAG"), ("PVC-01", "PVC")):
-        start = 1 + max([r["event_no"] for r in ledger.rows(kind=kind, mode=args.mode)], default=0)
-        new = client.fetch_component(comp, start)
-        for _, rec, _ in new:
-            twin.add_component(kind, rec)
-        print(f"{comp}: {len(new)} new records")
-    print(f"materials: {len(twin.book.port)} bag lots, {len(twin.book.od)} reels")
     for line in args.lines:
         old = ledger.rows(kind="ASM", line_id=line, mode=args.mode)
         for r in old:
-            twin.mon[line].process(json.loads(r["payload"]), r["event_no"], twin.book)
+            rec = json.loads(r["payload"])
+            if twin._data_checks(line, r["event_no"], rec, twin.mon[line]):
+                twin.mon[line].process(rec, r["event_no"], twin.book)
         next_row[line] = 1 + max([r["event_no"] for r in old], default=0)
         if ledger.rows(kind="EVALUATION", line_id=line, mode=args.mode):
             twin.done.add(line)
+        if old:
+            print(f"{line}: resumed after {len(old)} stored units")
 
-    active = [l for l in args.lines if l not in twin.done]
-    n = 0
-    while active and n < args.max_requests:
-        for line in list(active):
-            got = client.fetch_assembly(line, next_row[line], args.limit)
-            n += 1
-            if not got:
-                print(f"{line}: no more records")
-                active.remove(line)
-                continue
-            for event_no, rec, _ in got:
-                if rec.get("reel_id") not in twin.book.od or rec.get("bag_lot_id") not in twin.book.port:
-                    for comp, kind in (("BAG-01", "BAG"), ("PVC-01", "PVC")):
-                        start = 1 + max([r["event_no"] for r in ledger.rows(kind=kind, mode=args.mode)], default=0)
-                        for _, c, _ in client.fetch_component(comp, start):
-                            twin.add_component(kind, c)
-                u = twin.add_unit(line, event_no, rec)
-                f = twin.mon[line].last_forecast or {}
-                print(f"{line} #{event_no:4d} {u['unit_id']:>10} depth {u['depth']:6.3f}  resid {u['resid']:+.3f}  "
-                      f"slope {f.get('slope_mm_per_unit', 0):+.4f} t {f.get('t_slope', 0):+5.1f}  "
-                      f"k* {f.get('k_first_fail')}")
-                next_row[line] = event_no + 1
-            if line in twin.done and not args.continue_after_fail:
-                active.remove(line)
-            time.sleep(args.delay)
+    stats = {l: {"requests": 0, "units": 0} for l in args.lines}
+    errors = []
+
+    def batch_size(line):
+        f = twin.mon[line].last_forecast
+        risky = f and (f["drift_alarm"] or (f.get("p_next") or 0) >= args.slow_at)
+        return 1 if risky or len(twin.mon[line].units) < twin.mon[line].cfg["min_points"] else args.limit
+
+    def run_line(line):
+        idle = 0
+        try:
+            while line not in twin.done or args.continue_after_fail:
+                if stats[line]["requests"] >= args.max_requests:
+                    break
+                got = client.fetch_assembly(line, next_row[line], batch_size(line))
+                stats[line]["requests"] += 1
+                if not got:
+                    if args.follow and idle < args.follow:
+                        idle += 1
+                        time.sleep(2)
+                        continue
+                    print(f"{line}: end of data after {stats[line]['units']} new units")
+                    return
+                idle = 0
+                if any(rec.get("reel_id") not in twin.book.od or rec.get("bag_lot_id") not in twin.book.port for _, rec, _ in got):
+                    refresh_materials()           # a new lot / reel appeared: pull the new BAG / PVC records first
+                with lock:
+                    for i, (event_no, rec, _) in enumerate(got):
+                        u = twin.add_unit(line, event_no, rec, allow_commit=(i == len(got) - 1))
+                        next_row[line] = event_no + 1
+                        stats[line]["units"] += 1
+                        if u and args.verbose:
+                            f = twin.mon[line].last_forecast or {}
+                            print(f"{line} #{event_no:4d} {u['unit_id']:>12} depth {u['depth']:6.3f}  resid {u['resid']:+.3f}  "
+                                  f"P(next fails) {f.get('p_next') or 0:.3f}")
+                    if stats[line]["units"] % 100 < len(got):
+                        print(f"{line}: {stats[line]['units']} units, {stats[line]['requests']} requests, batch {len(got)}")
+                if args.delay:
+                    time.sleep(args.delay)
+        except FatalAPIError as e:
+            errors.append(str(e))
+            print(f"\nSTOPPED {line}: {e}")
+        except Exception as e:                     # keep the other lines running; everything so far is stored
+            errors.append(f"{line}: {type(e).__name__}: {e}")
+            print(f"\nSTOPPED {line}: {type(e).__name__}: {e}")
+
+    t0 = time.time()
+    threads = [threading.Thread(target=run_line, args=(l,), daemon=True) for l in args.lines if l not in twin.done]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    took = time.time() - t0
+    print("\n=== summary " + "=" * 50)
+    for l in args.lines:
+        ev = ledger.rows(kind="EVALUATION", line_id=l, mode=args.mode)
+        pr = ledger.rows(kind="PREDICTION", line_id=l, mode=args.mode)
+        res = json.loads(ev[0]["payload"]) if ev else {}
+        p = json.loads(pr[0]["payload"]) if pr else {}
+        print(f"{l}: {stats[l]['units']} new units in {stats[l]['requests']} requests | prediction "
+              f"{p.get('predicted_unit_id', '-')} (locked at {p.get('current_unit_id', '-')}) | first failure "
+              f"{res.get('actual_first_failure_unit_id', '-')} | {res.get('status', 'no failure yet')}"
+              + (f" | E={res['E_abs_error_units']} L={res['L_lead_units']}" if res.get("E_abs_error_units") is not None else ""))
+    print(f"took {took:.1f} s" + (f" | ERRORS: {errors}" if errors else ""))
     return twin
+
+
+def preflight(args):
+    """Connectivity check that only reads BAG-01 / PVC-01 (never consumes assembly data)."""
+    from store import Ledger as _L
+    led = _L(":memory:")
+    c = SimulatorClient(led, args.mode, args.team, args.code, base=args.base_url, retries=3, wait_unloaded=0)
+    print(f"checking {args.base_url} mode {args.mode} team {args.team} (the first call can take up to a minute)")
+    try:
+        for line, r in c.check().items():
+            print(f"  {line}: {'OK' if r['ok'] else 'EMPTY'} in {r['seconds']} s  first record: {json.dumps(r['first'])[:120]}")
+        print("ready: run the same command without --check")
+    except Exception as e:
+        print(f"  NOT READY: {e}")
 
 
 def run_sim(args, ledger, model):
@@ -202,7 +287,13 @@ if __name__ == "__main__":
     ap.add_argument("--code", help="team access code (required for HISTORICAL / REALTIME; never stored)")
     ap.add_argument("--db", default=None, help="ledger file (default: ledger_<MODE>.db)")
     ap.add_argument("--lines", nargs="+", default=list(ASM_LINES))
-    ap.add_argument("--limit", type=int, default=1, help="records per assembly request (REALTIME 1-5)")
+    ap.add_argument("--limit", type=int, default=5, help="max records per assembly request while a line is healthy "
+                                                          "(REALTIME 1-5, HISTORICAL 1-100); drops to 1 near a failure")
+    ap.add_argument("--slow-at", type=float, default=0.01, help="switch to 1 record per request once P(next fails) reaches this")
+    ap.add_argument("--base-url", default=DEFAULT_BASE, help="simulator base URL (use http://localhost:8090/simulator for mock_server.py)")
+    ap.add_argument("--check", action="store_true", help="only test the connection (reads BAG/PVC, never assembly data)")
+    ap.add_argument("--follow", type=int, default=0, help="when a line returns no data, ask again this many times (2 s apart)")
+    ap.add_argument("--verbose", action="store_true", help="print every unit")
     ap.add_argument("--max-requests", type=int, default=100000)
     ap.add_argument("--delay", type=float, default=0.0, help="seconds between requests")
     ap.add_argument("--continue-after-fail", action="store_true")
@@ -210,11 +301,24 @@ if __name__ == "__main__":
     args = ap.parse_args()
     if args.mode != "SIM" and not args.code:
         ap.error("--code is required for HISTORICAL and REALTIME")
+    if args.mode == "REALTIME" and not 1 <= args.limit <= 5:
+        ap.error("REALTIME allows 1-5 records per request (--limit)")
+    if args.check:
+        preflight(args)
+        raise SystemExit
 
     model = json.load(open("model.json"))
-    ledger = Ledger(args.db or f"ledger_{args.mode}.db", actor=args.operator)
+    db_path = args.db or f"ledger_{args.mode}.db"
+    # only one monitor may write a ledger at a time (a second terminal would otherwise race it)
+    lock_file = open(db_path + ".lock", "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        raise SystemExit(f"Another monitor is already writing {db_path}. Stop it first (Ctrl+C in its terminal).")
+    ledger = Ledger(db_path, actor=args.operator)
     ledger.append("SESSION", f"SESSION/{utc_now()}", {"mode": args.mode, "team": args.team, "lines": args.lines,
-                                                      "model_version": model["version"], "limit": args.limit},
+                                                      "model_version": model["version"], "limit": args.limit,
+                                                      "slow_at": args.slow_at, "base_url": args.base_url},
                   mode=args.mode)
     twin = (run_sim if args.mode == "SIM" else run_rest)(args, ledger, model)
     ok, n, problem = ledger.verify()

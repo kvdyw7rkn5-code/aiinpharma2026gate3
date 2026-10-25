@@ -7,7 +7,7 @@ Scoring and event rules we must follow: [`RULES.md`](RULES.md).
 python3 model.py                       # fit + freeze the white-box baseline on HISTORICAL data -> model.json
 python3 validate.py                    # OQ: both commit rules on E/L, false alarms, data-integrity tests
 python3 monitor.py --mode SIM          # offline demo with injected de-calibration (synthetic, flagged SIM)
-python3 monitor.py --mode REALTIME --team 01 --code <passcode> --limit 1
+python3 monitor.py --mode REALTIME --team 01 --code <passcode>
 python3 dashboard.py --mode REALTIME   # http://localhost:8050 (read-only)
 python3 analysis.py --mode HISTORICAL  # full-data analysis -> analysis_HISTORICAL.json
 python3 models.py                      # train + compare 14 models -> models_report.json (~70 s)
@@ -39,7 +39,56 @@ Chart.js is served locally from `web/`, so the site works without internet.
 The dashboard only processes ledger entries that are new since the last refresh, compresses every response,
 and skips refreshes when nothing has changed or the browser tab is hidden. A live update takes about 1 ms and
 50 KB, down from 1.1 s and 390 KB.
-Use `--limit 1` in REALTIME so each prediction is committed before the next unit is requested.
+## Live REALTIME run (jury)
+1. **Before your slot:** `python3 monitor.py --mode REALTIME --team 01 --code <passcode> --check`. It reads only BAG-01 /
+   PVC-01, so it never uses up assembly data, and it wakes up the hosted simulator (the first call can take up to a
+   minute).
+2. **Terminal 1:** `python3 dashboard.py --mode REALTIME` and open http://localhost:8050. It shows "waiting for the
+   first records…" until data arrives.
+3. **Terminal 2:** `python3 monitor.py --mode REALTIME --team 01 --code <passcode>`. Add `--delay 0.2` to slow the
+   stream down so the audience can follow it.
+
+What the monitor does for you:
+- **Parallel lines:** all three lines are pulled at the same time.
+- **Adaptive batches:** up to 5 records per request (the REALTIME maximum) while a line is healthy, and 1 per request
+  as soon as P(next device fails) reaches 1 % (`--slow-at`) or a drift alarm is active. A prediction is only locked
+  after the last record of a batch, so the predicted device is always one that has not been received yet.
+- **Retries:** network errors, timeouts and HTTP 5xx are retried with backoff. HTTP 503 ("dataset not loaded") is
+  waited out for up to 10 minutes. A wrong team, passcode or line (HTTP 404/400) stops at once with a clear message.
+- **Crash-safe:** if the monitor stops (Ctrl+C, crash, laptop sleep), run the same command again. It resumes every line
+  from the ledger. A second monitor on the same ledger is refused.
+- **Summary at the end:** for every line, the prediction X, the device it was locked at (Y), the actual first failure
+  (Z), and E / L.
+
+## Rehearse with the fake simulator (`mock_server.py`)
+```bash
+python3 mock_server.py                     # http://localhost:8090, REALTIME passcode "LIVE"
+python3 dashboard.py --mode REALTIME --db rehearsal.db
+python3 monitor.py --mode REALTIME --team 01 --code LIVE --base-url http://localhost:8090/simulator --db rehearsal.db
+curl localhost:8090/mock/truth             # answer key: scenario and first failure per line
+```
+The mock uses the same URLs and rules as the real simulator: 1–5 records per REALTIME request, 503 before data is
+loaded, `[]` past the end, 404 for a wrong team or passcode. Its data is semi-random but physically consistent: new
+bag lots and tube reels, and lines that hold a lot or reel for a realistic run of devices. Every line gets its own
+problem. The defaults are an actuator drift on ASM-01, a camera drift on ASM-02 and a random one on ASM-03 (sudden
+jump, slow drift or healthy line).
+
+Options:
+- `--seed N`: a different random plant.
+- `--units 900`: run length per line.
+- `--scenario ASM-03=step:1.5@300`: set one line's problem.
+- `--latency 0.3`: slower answers.
+- `--flaky 0.1`: 10 % random errors or slow answers.
+- `--unloaded 20`: answer 503 for the first 20 s.
+- `--cursor`: the cursor behaviour described in the task text.
+
+Rehearsal results (default plant, seed 7):
+- **ASM-01:** EARLY, E = 13, L = 3.
+- **ASM-02:** MISSED. Noise pushed a device out of spec before the risk reached 10 %.
+- **ASM-03:** prediction locked near the end of a slow drift that did not reach the limit.
+- **Same results under stress:** with 10 % random errors, 8 s of "not loaded" and the cursor behaviour, the run
+  produced exactly the same 1,406 records and predictions.
+- **Same results after a crash:** after a hard kill mid-run and a restart, the result was also exactly the same.
 The dashboard can be started before or after the monitor. Without data it shows "waiting for the first records…" and
 fills in by itself as soon as the monitor writes to the ledger.
 
