@@ -11,13 +11,19 @@ python3 analysis.py --mode HISTORICAL  # full-data analysis -> analysis_HISTORIC
 python3 models.py                      # train + compare 14 models -> models_report.json (~70 s)
 python3 model_figures.py               # presentation charts -> figures/model_accuracy.png, figures/model_twin.png
 ```
-The dashboard has three tabs:
-- **Live monitor:** the whole run per line, the forecast and the locked predictions.
-- **Data analysis:** a **Model lab** (see below), then every record from the API, timestamp counts per source,
-  data checks, material charts, what drives depth, the point of failure (closest approach on real data) and the
-  synthetic de-calibration runs.
-- **Model comparison:** all 14 models side by side, with charts, a results table, what each model is,
-  input importance, and the verdict.
+The website (`web/index.html`, `web/app.css`, `web/app.js`, served by `dashboard.py`) has five tabs:
+- **How it works:** the six steps of the system, what insertion depth is, real vs synthetic data,
+  a glossary, and how ALCOA+ is met.
+- **Live monitor:** one card per line. It shows a plain-language status (in control / drift detected /
+  prediction locked / failed), key numbers, the depth chart with forecast, the drift alarm meter and the locked
+  prediction with its fingerprint. You can show the last 300 units or the whole run.
+- **Data explorer:** every record from the API, where the line came closest to failing, timestamps per source,
+  data quality checks, materials, and the synthetic failure runs.
+- **Model lab:** see below.
+- **Model comparison:** all 14 models side by side, with the verdict.
+
+Every technical word (dotted underline) and every model name shows a short explanation when you hover over it.
+Chart.js is served locally from `web/`, so the site works without internet.
 
 The dashboard only processes ledger entries that are new since the last refresh, compresses every response,
 and skips refreshes when nothing has changed or the browser tab is hidden. A live update takes about 1 ms and
@@ -48,7 +54,12 @@ Pick a **training dataset**, a **test dataset** and up to 8 models, then click *
 | `REALTIME · …` | Appears automatically once a REALTIME ledger exists. |
 | `FAKE` | Generated on request: historical units plus a drift you choose (none / actuator / camera / sudden step), with its size in mm per unit, start unit, number of units, extra noise and random seed. |
 
-For every model the lab shows:
+Lab settings can be put in a link, e.g.
+`http://localhost:8050/?train=HISTORICAL:ASM-01&test=SIM:ASM-02&models=M03F,M09,M13&run=1#lab`. That opens a ready-made
+comparison, which is handy in a presentation.
+
+For every model the lab shows a **timeline of where each model predicts the first failure** (one row per model:
+▲ drift alarm, ○ prediction locked, ◆ predicted failure, red line = actual first failure), plus:
 - prediction error on the test data (RMSE, MAE, R², bias, max error),
 - a chart of measured vs predicted depth,
 - a rolling residual chart, where drift shows up as a trend,

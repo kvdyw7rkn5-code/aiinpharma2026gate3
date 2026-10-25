@@ -24,6 +24,47 @@ from store import Ledger
 LINES = ("ASM-01", "ASM-02", "ASM-03")
 FROZEN = "M03F"
 NAMES = {k: n for k, n, *_ in M.MODELS} | {FROZEN: "Production model (frozen model.json)"}
+
+# Plain-language descriptions shown as tooltips everywhere a model appears.
+# kind: what sort of model it is; box: how easy it is to explain to an inspector.
+MODEL_INFO = {
+    FROZEN: ("Production model (frozen)", "Simple formula", "white",
+             "The exact formula the live system uses (model.json). It is never retrained, so it ignores the "
+             "training data you pick and shows what production would do."),
+    "M00": ("Average only", "Reference", "white",
+            "Always predicts the average depth. A 'do nothing' yardstick that every real model must beat."),
+    "M01": ("Gap only (Gate 2 idea)", "Simple formula", "white",
+            "A straight line on one number: bag port size minus tube size, the root cause found in Gate 2."),
+    "M02": ("Gap + pressure", "Simple formula", "white",
+            "The gap plus the pressure the technician sets. Still a straight-line formula."),
+    "M03": ("Linear: port + tube + pressure", "Simple formula", "white",
+            "Same formula as production (4 numbers you can check by hand), but retrained on the data you pick."),
+    "M04": ("Linear + material unevenness", "Simple formula", "white",
+            "Also uses how uneven each bag lot and tube reel is. Looks better on known data, misleads on new materials."),
+    "M05": ("Curved formula (quadratic)", "Simple formula", "white",
+            "Lets the effects bend and interact, e.g. pressure matters more when the fit is loose. 10 numbers."),
+    "M06": ("Lookup table", "Table", "white",
+            "Looks up the average depth of past units with the same bag level, tube level and pressure. "
+            "Has no answer for a setting it has never seen."),
+    "M07": ("Decision tree", "Machine learning", "white",
+            "Up to 16 readable if-then rules, e.g. IF pressure > 4.2 AND port is large THEN 16.3 mm."),
+    "M08": ("Random forest", "Machine learning", "grey",
+            "Averages 300 randomly varied decision trees. Accurate on familiar data, cannot extrapolate."),
+    "M09": ("Gradient boosting", "Machine learning", "grey",
+            "300 small trees, each fixing the errors of the previous ones. Usually the most accurate ML model on familiar data."),
+    "M10": ("Nearest neighbours", "Machine learning", "grey",
+            "Finds the 25 most similar past units and averages their depth."),
+    "M11": ("Support vector regression", "Machine learning", "black",
+            "Fits a smooth curved surface through the data. Hard to explain why it predicts what it does."),
+    "M12": ("Gaussian process", "Machine learning", "grey",
+            "A smooth curve that also reports how unsure it is. Accurate on new settings, slowest to train."),
+    "M13": ("Neural network", "Machine learning", "black",
+            "Two layers of artificial neurons, about 740 weights with no physical meaning. Fails badly on new settings."),
+}
+
+
+def model_info():
+    return [{"key": k, "name": n, "kind": kind, "box": box, "desc": d} for k, (n, kind, box, d) in MODEL_INFO.items()]
 _cache, _lock = {}, threading.Lock()
 
 
@@ -44,6 +85,9 @@ def _records(mode):
         return _cache[mode]
 
 
+TITLE = {"HISTORICAL": "Historical (real)", "SIM": "Synthetic drift", "REALTIME": "Realtime (jury)"}
+
+
 def datasets():
     out = []
     for mode in ("HISTORICAL", "SIM", "REALTIME"):
@@ -54,11 +98,16 @@ def datasets():
         for l in lines:
             n = len(rec["ASM"][l])
             nok = sum(not (13 <= r["visual_inspection_mm"] <= 17) for r in rec["ASM"][l])
-            out.append({"id": f"{mode}:{l}", "label": f"{mode} · {l} ({n} units, {nok} out of spec)",
-                        "synthetic": mode == "SIM"})
+            desc = {"HISTORICAL": "Real data from the simulator API. Calibrated line.",
+                    "SIM": "Synthetic: real units with an injected drift. Stops at the first failure.",
+                    "REALTIME": "Live data received during the jury run."}[mode]
+            out.append({"id": f"{mode}:{l}", "label": f"{TITLE[mode]} · {l}", "n": n, "nok": nok,
+                        "desc": f"{desc} {n} units, {nok} out of spec.", "synthetic": mode == "SIM"})
         if len(lines) > 1:
-            out.append({"id": f"{mode}:ALL", "label": f"{mode} · all lines", "synthetic": mode == "SIM"})
-    out.append({"id": "FAKE", "label": "FAKE · generated with the settings below", "synthetic": True})
+            out.append({"id": f"{mode}:ALL", "label": f"{TITLE[mode]} · all lines", "n": None, "nok": None,
+                        "desc": f"All {mode.lower()} assembly lines together.", "synthetic": mode == "SIM"})
+    out.append({"id": "FAKE", "label": "Fake · generate your own", "n": None, "nok": None,
+                "desc": "Real units plus a drift you choose (type, speed, start). Made up on the spot.", "synthetic": True})
     return out
 
 
@@ -137,7 +186,8 @@ def twin_replay(model, sigma, recs, bag, pvc, d_test):
     cfg = copy.deepcopy(json.load(open("model.json")))
     cfg["sigma_mm"] = sigma
     out = {"first_alarm": None, "predicted_unit": None, "predicted_at": None, "actual_failure": None,
-           "status": None, "error_units": None}
+           "status": None, "error_units": None,
+           "first_alarm_idx": None, "predicted_at_idx": None, "predicted_idx": None, "actual_idx": None}
     streams = {}
     for i, r in enumerate(recs):                     # one monitor per line if several lines are mixed
         streams.setdefault(r["line_id"], []).append((i, r))
@@ -148,9 +198,9 @@ def twin_replay(model, sigma, recs, bag, pvc, d_test):
         u = mon.process(r, j + 1, book)
         f = mon.last_forecast
         if out["first_alarm"] is None and f and f["drift_alarm"]:
-            out["first_alarm"] = r["unit_id"]
+            out["first_alarm"], out["first_alarm_idx"] = r["unit_id"], i + 1
         if u["nok"]:
-            out["actual_failure"] = r["unit_id"]
+            out["actual_failure"], out["actual_idx"] = r["unit_id"], i + 1
             if pred_idx is None:
                 out["status"] = "MISSED"
             else:
@@ -160,9 +210,10 @@ def twin_replay(model, sigma, recs, bag, pvc, d_test):
         if pred_idx is None and mon.should_commit():
             k = mon.last_forecast["k_first_fail"]
             pred_idx = j + k
-            out["predicted_at"] = r["unit_id"]
-            out["predicted_unit"] = (streams[first_line][pred_idx][1]["unit_id"]
-                                     if pred_idx < len(streams[first_line]) else f"+{k} after {r['unit_id']}")
+            out["predicted_at"], out["predicted_at_idx"] = r["unit_id"], i + 1
+            inside = pred_idx < len(streams[first_line])
+            out["predicted_unit"] = streams[first_line][pred_idx][1]["unit_id"] if inside else f"+{k} after {r['unit_id']}"
+            out["predicted_idx"] = streams[first_line][pred_idx][0] + 1 if inside else i + 1 + k
     if out["status"] is None:
         out["status"] = "FALSE ALARM (no failure followed)" if pred_idx is not None else "no failure, no alarm"
     out["line"] = first_line

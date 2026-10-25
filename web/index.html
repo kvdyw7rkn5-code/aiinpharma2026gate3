@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gate 3 · Digital Twin</title>
+<link rel="stylesheet" href="/app.css">
+<script src="/chart.umd.min.js"></script>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Enteral Feeding Device · Digital Twin</h1>
+    <p>Watches the assembly lines, warns <b>before</b> the first out-of-spec unit is made, and keeps every record tamper-proof.</p>
+  </div>
+  <div class="hdr-pills" id="hdr-pills"></div>
+</header>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="how">How it works</button>
+  <button data-tab="live">Live monitor</button>
+  <button data-tab="data">Data explorer</button>
+  <button data-tab="lab">Model lab</button>
+  <button data-tab="cmp">Model comparison</button>
+</nav>
+<div class="tabintro" id="tabintro"></div>
+
+<main>
+<!-- ============================================================ HOW IT WORKS -->
+<section id="tab-how">
+  <div class="card">
+    <h2>What the system does, in six steps</h2>
+    <div class="steps">
+      <div class="step"><div class="num">1</div><h3>Receive data</h3>
+        <p>Every second the simulator sends bag port sizes (BAG-01), tube sizes (PVC-01) and one record per finished device from each assembly line (ASM-01/02/03).</p></div>
+      <div class="step"><div class="num">2</div><h3>Store it tamper-proof</h3>
+        <p>Each record is saved exactly as received in a <span class="term" data-term="ledger">ledger</span>. Records can be added but never changed or deleted, and a <span class="term" data-term="hash">hash chain</span> proves it.</p></div>
+      <div class="step"><div class="num">3</div><h3>Work out the expected depth</h3>
+        <p>A simple formula says how deep the tube <i>should</i> go for this bag lot, tube reel and pressure: the <span class="term" data-term="expected">expected depth</span>.</p></div>
+      <div class="step"><div class="num">4</div><h3>Watch the difference</h3>
+        <p>Measured minus expected depth is just noise on a healthy line. The <span class="term" data-term="cusum">drift alarm meter</span> spots when it keeps moving one way: <span class="term" data-term="drift">drift</span>.</p></div>
+      <div class="step"><div class="num">5</div><h3>Forecast and lock</h3>
+        <p>The drift is extended forward to find the first unit likely to fall outside 13–17 mm. That unit is <span class="term" data-term="lock">locked</span> with a timestamp before it is made.</p></div>
+      <div class="step"><div class="num">6</div><h3>Check against reality</h3>
+        <p>When the camera measures that unit, the system records whether the prediction was a HIT, <span class="term" data-term="early">EARLY, LATE or MISSED</span>.</p></div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>The one thing we measure: insertion depth</h2>
+      <p>How far the PVC tube is pushed into the bag port. The camera measures it on every finished device.</p>
+      <div class="specbar">
+        <div class="zone bad">too shallow<br>&lt; 13.0 mm</div>
+        <div class="zone good">OK · 13.0 – 17.0 mm<br><b>target 15.0 mm</b></div>
+        <div class="zone bad">too deep<br>&gt; 17.0 mm</div>
+      </div>
+      <p class="note">1.5 cm ± 0.2 cm. A tube that is too shallow can leak; one that is too deep can block the port.
+        Depth depends on the bag port size (bigger → deeper), the tube size (bigger → shallower), the pressure (higher → deeper)
+        and on how well the machine is calibrated.</p>
+    </div>
+    <div class="card">
+      <h2>Real data vs synthetic data</h2>
+      <p><span class="pill ok">REAL</span> <b>Historical</b> and <b>Realtime</b> data come from the simulator API and are stored untouched.
+        The historical line never failed (closest unit: 0.149 mm from the limit).</p>
+      <p><span class="pill warn">SYNTHETIC</span> To show and test predictions we also use <span class="term" data-term="synthetic">synthetic data</span>:
+        real historical units with an artificial drift added. It is always labelled and kept in a separate file.</p>
+      <p><span class="pill warn">FAKE</span> The Model lab can generate fake data on the spot with a drift you choose. It exists only in memory.</p>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>Words used on this site</h2>
+      <table id="glossary"></table>
+    </div>
+    <div class="card">
+      <h2>How data integrity is guaranteed (ALCOA+ / GxP)</h2>
+      <table class="kv">
+        <tr><th>Attributable</th><td>Every record has a unique ID (mode / line / event number), its line and its unit ID.</td></tr>
+        <tr><th>Legible</th><td>Plain JSON, readable on this site and in the export file.</td></tr>
+        <tr><th>Contemporaneous</th><td>Our own UTC timestamp is added the moment a record arrives or a prediction is locked.</td></tr>
+        <tr><th>Original</th><td>Every API response is stored word for word before it is read. Source timestamps are never changed.</td></tr>
+        <tr><th>Accurate</th><td>Calculated values are stored separately; source values are never edited.</td></tr>
+        <tr><th>Complete</th><td>Nothing can be deleted (database rules). Missing event numbers would show up.</td></tr>
+        <tr><th>Consistent</th><td>One UTC clock, one data format, one SHA-256 hash chain.</td></tr>
+        <tr><th>Enduring / Available</th><td>One database file plus an export; this site only reads it.</td></tr>
+        <tr><th>Locked predictions</th><td>One prediction per line, saved once. A second attempt is refused by the database.</td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ LIVE -->
+<section id="tab-live">
+  <div class="card explain">
+    <b>How to read this page.</b> Each card is one assembly line. Dots are finished devices: their measured depth over time.
+    The grey line is the <span class="term" data-term="expected">expected depth</span>; the dashed orange line is the forecast with its uncertainty band.
+    Red lines are the 13 / 17 mm limits.
+    <div class="legendrow" id="status-legend"></div>
+  </div>
+  <div class="viewtoggle">Show: <button data-win="300" class="on">last 300 units</button><button data-win="0">whole run</button></div>
+  <div class="grid3" id="lines"></div>
+  <div class="grid2">
+    <div class="card"><h2>Materials in use</h2>
+      <p class="note">Average bag port size per bag lot and tube size per reel. Each chart's vertical axis spans exactly the specification range, so every bar that fits is in spec.</p>
+      <div class="grid2 tight"><div><canvas id="live-bag" height="220"></canvas></div><div><canvas id="live-pvc" height="220"></canvas></div></div></div>
+    <div class="card"><h2>Messages from the system</h2>
+      <p class="note">Newest first. Drift warnings, data problems (missing fields, gaps in unit numbers, time going backwards).</p>
+      <div class="scroll"><table id="alerts"></table></div></div>
+  </div>
+</section>
+
+<!-- ============================================================ DATA EXPLORER -->
+<section id="tab-data">
+  <div class="tiles" id="kpis"></div>
+
+  <div class="card">
+    <h2>1 · The whole run <select id="d-line"></select></h2>
+    <p class="note">Every finished device in order. Colour = assembly pressure. Hover a dot for the unit ID and time.
+      The ▲ marks are the units that came closest to a limit.</p>
+    <canvas id="d-depth" height="95"></canvas>
+    <h3>Drift alarm meter over the whole run</h3>
+    <p class="note">The <span class="term" data-term="cusum">drift alarm meter</span> stays low when differences are random. It only raises an alarm above 5.
+      The green line is the <span class="term" data-term="followerr">axis following error</span> (mm).</p>
+    <canvas id="d-cusum" height="55"></canvas>
+  </div>
+
+  <div class="card"><h2>2 · Where would the line fail first?</h2><div id="d-fail"></div></div>
+
+  <div class="grid2">
+    <div class="card"><h2>3 · What data we received</h2>
+      <p class="note">Every timestamp per source, exactly as received.</p>
+      <table id="d-timing"></table><p class="note" id="d-timing-note"></p></div>
+    <div class="card"><h2>Time between finished devices</h2>
+      <p class="note">How long the line took between two consecutive devices.</p>
+      <canvas id="d-dt" height="170"></canvas><p class="note" id="d-dt-note"></p></div>
+  </div>
+
+  <div class="card"><h2>4 · Data quality checks</h2>
+    <p class="note">Automatic checks run on every record. PASS = fine, WARN = worth a look, FAIL = must be investigated.</p>
+    <table id="d-checks"></table></div>
+
+  <div class="grid3">
+    <div class="card"><h2>5 · Tube size, every reading</h2>
+      <p class="note">PVC-01 outside diameter (inches). Colour = the reel's size level. Red = spec 0.1675–0.1725 in.</p>
+      <canvas id="d-pvc" height="210"></canvas></div>
+    <div class="card"><h2>Bag port size, every measurement</h2>
+      <p class="note">BAG-01 port inside diameter (inches). Colour = the lot's size level. Red = spec 0.173–0.176 in.</p>
+      <canvas id="d-bag" height="210"></canvas></div>
+    <div class="card"><h2>What makes the tube go deeper?</h2>
+      <p class="note">Average depth (mm) for each level. Bigger bag port and higher pressure → deeper; bigger tube → shallower.</p>
+      <canvas id="d-eff" height="210"></canvas></div>
+  </div>
+
+  <div class="card synthetic" id="d-sim-card"><h2>6 · What a failure looks like <span class="pill warn">SYNTHETIC test data</span></h2>
+    <p class="note">The real data has no failure, so these runs add an artificial drift to real units. Each chart marks when the alarm fired,
+      when the prediction was locked, which unit was predicted, and which unit actually failed first.</p>
+    <div class="grid3 tight"><div><canvas id="s-ASM-01" height="220"></canvas></div><div><canvas id="s-ASM-02" height="220"></canvas></div><div><canvas id="s-ASM-03" height="220"></canvas></div></div>
+    <p class="note" id="d-sim-note"></p></div>
+</section>
+
+<!-- ============================================================ MODEL LAB -->
+<section id="tab-lab">
+  <div class="labsteps">
+    <div class="card"><h2><span class="num">1</span> Learn from</h2><p class="note">The data the models are trained on.</p><div id="l-train" class="radios"></div></div>
+    <div class="card"><h2><span class="num">2</span> Test on</h2><p class="note">The data the models must predict. Pick something with a failure to see predictions.</p><div id="l-test" class="radios"></div></div>
+    <div class="card"><h2><span class="num">3</span> Models to compare</h2><p class="note">Hover a model for a short description. Up to 8.</p>
+      <div class="presets"><button data-preset="rec">Recommended</button><button data-preset="formula">Simple formulas</button><button data-preset="ml">Machine learning</button><button data-preset="none">Clear</button></div>
+      <div id="l-models"></div></div>
+  </div>
+  <div class="card" id="l-fake" style="display:none"><h2>Fake data settings</h2>
+    <p class="note">Fake data = real historical units with a drift you choose. Only used where you picked “Fake”.</p>
+    <div class="fakegrid">
+      <label>Type of problem<select id="l-fk"><option value="none">none (healthy line)</option><option value="axis" selected>actuator drift (pushes deeper over time)</option><option value="vision">camera drift (measures shallower over time)</option><option value="step">sudden jump</option></select></label>
+      <label>Drift per unit (mm)<input id="l-fs" type="number" step="0.001" value="0.010"><small>0.01 = 1 mm every 100 units. Negative = shallower. For a jump: its size.</small></label>
+      <label>Problem starts at unit<input id="l-fst" type="number" value="150"></label>
+      <label>Number of units<input id="l-fn" type="number" value="600" min="50" max="1800"></label>
+      <label>Extra noise (mm)<input id="l-fnoise" type="number" step="0.01" value="0"><small>0 = normal noise only</small></label>
+      <label>Random seed<input id="l-fseed" type="number" value="1"><small>Change it to get a different sample</small></label>
+    </div>
+  </div>
+  <div class="runbar"><button class="run" id="l-run">Train &amp; compare</button><span id="l-status" class="note"></span></div>
+
+  <div id="l-out" style="display:none">
+    <div class="card verdict" id="l-verdict"></div>
+    <div class="card"><h2>Where each model predicts the first failure <span id="l-badge"></span></h2>
+      <p class="note">One row per model, along the units of the test data. <b>▲</b> drift alarm · <b>●</b> moment the prediction was locked ·
+        <b>◆</b> the unit it predicted as first failure · <b class="red">red line</b> the unit that actually failed first.
+        The gap between ◆ and the red line is how early (or late) the warning was.</p>
+      <div id="l-tl-box" style="position:relative;height:200px"><canvas id="l-timeline"></canvas></div></div>
+    <div class="card"><h2>Measured vs predicted depth <span class="viewtoggle inline" id="l-zoom"><button data-zoom="all" class="on">all units</button><button data-zoom="fail">around the failure</button></span></h2>
+      <p class="note">Grey dots = measured depth of the test units. Coloured lines = each model's <span class="term" data-term="expected">expected depth</span>.
+        Dashed vertical lines = each model's predicted first failure; red = the actual first failure.</p>
+      <canvas id="l-pred" height="105"></canvas></div>
+    <div class="grid2">
+      <div class="card"><h2>Scores</h2><table id="l-table"></table><p class="note" id="l-note"></p></div>
+      <div class="card"><h2>How far off each model is, over time</h2>
+        <p class="note">Measured − predicted, averaged over 25 units. Flat around 0 = good. A steady climb = the line is drifting
+          (this is what the alarm reacts to).</p><canvas id="l-res" height="200"></canvas></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ MODEL COMPARISON -->
+<section id="tab-cmp">
+  <div class="card verdict" id="m-verdict"></div>
+  <div class="card"><h2>How the models were tested</h2>
+    <p class="note">Same 1,800 real units, same inputs (bag port size, tube size, pressure, all known <b>before</b> the device is made), four tests:</p>
+    <div class="steps four">
+      <div class="step"><h3>Random split</h3><p>Hide a random 20 % of units, predict them. The easiest test: similar units are in training.</p></div>
+      <div class="step"><h3>New lots</h3><p>Hide one whole bag lot and tube reel. Does the model work on the next production lot?</p></div>
+      <div class="step"><h3>Unseen setting</h3><p>Hide a whole pressure, bag size or tube size. Can it handle a setting it has never seen? <span class="term" data-term="unseen">more</span></p></div>
+      <div class="step"><h3>Future</h3><p>Learn from the first 70 % of the run, predict the last 30 %.</p></div>
+    </div>
+  </div>
+  <div class="grid2">
+    <div class="card"><img src="/figures/model_accuracy.png" alt="Model accuracy chart"></div>
+    <div class="card"><img src="/figures/model_twin.png" alt="Twin outcome chart"></div>
+  </div>
+  <div class="card"><h2>All models <span class="note">typical error in mm (<span class="term" data-term="rmse">RMSE</span>), lower is better · bold = best in column</span></h2>
+    <div class="scroll x"><table id="m-table"></table></div></div>
+  <div class="grid3">
+    <div class="card"><h2>Which input matters most?</h2><p class="note">How much worse (mm) each model gets when one input is scrambled.</p><table id="m-imp"></table></div>
+    <div class="card"><h2>Why not use the actuator position?</h2><p class="note" id="m-leak"></p></div>
+    <div class="card"><h2>The production formula</h2><p class="note" id="m-prod"></p></div>
+  </div>
+</section>
+</main>
+<div id="tip" class="tip"></div>
+<script src="/app.js"></script>
+</body>
+</html>
