@@ -4,51 +4,20 @@ The dashboard opens the ledger with SQLite mode=ro, so it can never change recor
 All derived values shown are recomputed from the stored original records with the frozen model.
 """
 import argparse
+import gzip
 import json
+import os
+import re
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
 
+import lab
 from analysis import analyze
 from model import LineMonitor, MaterialBook
 from store import Ledger
 
 LINES = ("ASM-01", "ASM-02", "ASM-03")
-
-
-def state(db_path, mode):
-    led = Ledger(db_path, readonly=True)
-    ok, n, problem = led.verify()
-    models = led.rows(kind="MODEL")
-    model = json.loads(models[-1]["payload"])
-    book = MaterialBook()
-    for r in led.rows(kind="BAG", mode=mode):
-        book.add_bag(json.loads(r["payload"]))
-    for r in led.rows(kind="PVC", mode=mode):
-        book.add_pvc(json.loads(r["payload"]))
-    lines = {}
-    for line in LINES:
-        mon = LineMonitor(line, model)
-        for r in led.rows(kind="ASM", line_id=line, mode=mode):
-            mon.process(json.loads(r["payload"]), r["event_no"], book)
-        pred = led.rows(kind="PREDICTION", line_id=line, mode=mode)
-        ev = led.rows(kind="EVALUATION", line_id=line, mode=mode)
-        f = mon.last_forecast
-        lines[line] = {
-            "units": [{k: u[k] for k in ("event_no", "unit_id", "depth", "baseline", "resid", "cusum_pos",
-                                         "cusum_neg", "nok", "follow_err", "vision_offset", "pressure")}
-                      for u in mon.units],          # whole run
-            "forecast": f,
-            "prediction": dict(json.loads(pred[0]["payload"]), entry_hash=pred[0]["entry_hash"],
-                               received_utc=pred[0]["received_utc"]) if pred else None,
-            "evaluation": json.loads(ev[0]["payload"]) if ev else None,
-        }
-    alerts = [dict(json.loads(r["payload"]), line=r["line_id"], event_no=r["event_no"], utc=r["received_utc"])
-              for r in led.rows(kind="ALERT", mode=mode)][-40:]
-    mat = book.summary()
-    return {"mode": mode, "integrity": {"ok": ok, "entries": n, "problem": problem},
-            "model": {k: model[k] for k in ("version", "formula", "coef", "sigma_mm", "r2")},
-            "lines": lines, "alerts": alerts,
-            "materials": {"bag": {k: round(v["mean"], 5) for k, v in mat["bag_lots"].items()},
-                          "pvc": {k: round(v["mean"], 5) for k, v in mat["reels"].items()}}}
 
 
 PAGE = r"""<!DOCTYPE html><html><head><meta charset="utf-8"><title>Gate 3 Digital Twin</title>
@@ -71,7 +40,12 @@ table{border-collapse:collapse;width:100%;font-size:12px}td,th{border-bottom:1px
 .kpi{background:#fff;border-radius:8px;padding:10px 12px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .kpi .v{font-size:24px;font-weight:600}.kpi .l{font-size:12px;color:#666}
 .PASS{color:#2e8b57;font-weight:600}.WARN{color:#b07d00;font-weight:600}.FAIL{color:#c0392b;font-weight:600}.INFO{color:#2471a3;font-weight:600}
-.note{font-size:12px;color:#444;line-height:1.5}.sim{border:2px dashed #e0a100}
+.note{font-size:12px;color:#444;line-height:1.5}
+.labctl{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;font-size:12px;margin:6px 0}
+.labctl select,.labctl input{font-size:12px;padding:3px}.labctl input{width:80px}
+fieldset{border:1px solid #ddd;border-radius:6px;display:flex;gap:10px;padding:4px 10px}legend{font-size:11px;color:#666}
+.chk{border:1px solid #ddd;border-radius:14px;padding:3px 9px;cursor:pointer;user-select:none}.chk input{margin-right:4px}
+.run{background:#1f3a5f;color:#fff;border:0;border-radius:6px;padding:7px 16px;cursor:pointer;font-size:13px}.sim{border:2px dashed #e0a100}
 </style></head><body>
 <header><h1>Enteral Feeding Device · Digital Twin (Gate 3)</h1>
 <span><button class="tab on" id="b-live" onclick="show('live')">Live monitor</button><button class="tab" id="b-ana" onclick="show('ana')">Data analysis</button></span><span id="mode"></span><span id="integ"></span><span id="model" style="font-size:12px"></span></header>
@@ -144,6 +118,31 @@ __ANALYSIS_JS__
 ANALYSIS_HTML = r"""<div id="tab-ana" style="display:none">
 <div class="kpis" id="kpis"></div>
 <div class="grid">
+ <div class="card wide" id="lab"><h2>Model lab · train on one dataset, test on another, compare models <span id="l-badge"></span></h2>
+  <div class="labctl">
+   <label>Training data<br><select id="l-train"></select></label>
+   <label>Test data<br><select id="l-test"></select></label>
+   <fieldset><legend>Fake data generator (used when FAKE is selected)</legend>
+    <label>drift<br><select id="l-fk"><option value="none">none</option><option value="axis" selected>actuator drift</option><option value="vision">camera drift</option><option value="step">sudden step</option></select></label>
+    <label>mm per unit<br><input id="l-fs" type="number" step="0.001" value="0.010"></label>
+    <label>starts at unit<br><input id="l-fst" type="number" value="150"></label>
+    <label>units<br><input id="l-fn" type="number" value="600" min="50" max="1800"></label>
+    <label>extra noise mm<br><input id="l-fnoise" type="number" step="0.01" value="0"></label>
+    <label>seed<br><input id="l-fseed" type="number" value="1"></label></fieldset>
+  </div>
+  <div class="labctl" id="l-models"></div>
+  <div><button class="run" onclick="runLab()">Train &amp; compare</button> <span id="l-status" class="note"></span></div>
+  <div id="l-out" style="display:none">
+   <table id="l-table" style="margin-top:8px"></table>
+   <div class="grid" style="padding:0;grid-template-columns:2fr 1fr">
+    <div><b class="note">Test data: measured depth (grey) vs each model's predicted depth</b><canvas id="l-pred" height="120"></canvas></div>
+    <div><b class="note">Measured − predicted, 25-unit rolling mean (drift shows as a trend)</b><canvas id="l-res" height="240"></canvas></div>
+   </div>
+   <div class="note" id="l-note"></div>
+  </div>
+ </div>
+</div>
+<div class="grid">
  <div class="card wide"><h2>Whole run · insertion depth of every unit <span><select id="a-line" onchange="renderAna()"></select></span></h2>
   <canvas id="a-depth" height="95"></canvas>
   <div class="note">Each dot is one finished device (x = event no. at the source, hover for unit ID and time). Colour = assembly pressure.
@@ -166,7 +165,7 @@ let cur='live', ana=null;
 function show(t){cur=t;document.getElementById('tab-live').style.display=t=='live'?'':'none';
  document.getElementById('tab-ana').style.display=t=='ana'?'':'none';
  document.getElementById('b-live').className='tab'+(t=='live'?' on':'');document.getElementById('b-ana').className='tab'+(t=='ana'?' on':'');
- if(t=='ana')loadAna();}
+ if(t=='ana'){loadAna();initLab();}}
 async function loadAna(){ana=await (await fetch('/api/analysis')).json();
  const sel=document.getElementById('a-line'),avail=Object.keys(ana.lines).filter(l=>ana.lines[l]);
  if(!sel.options.length)sel.innerHTML=avail.map(l=>`<option>${l}</option>`).join('');renderAna();}
@@ -254,32 +253,258 @@ function renderAna(){
 }
 """
 
-PAGE = PAGE.replace("__ANALYSIS_HTML__", ANALYSIS_HTML).replace("__ANALYSIS_JS__", ANALYSIS_JS)
-_ANA_CACHE = {}
+MODELS_HTML = r"""<div id="tab-mod" style="display:none"><div class="grid">
+ <div class="card wide"><h2>Which model should predict insertion depth?</h2><div class="note" id="m-verdict"></div></div>
+ <div class="card wide"><img src="/figures/model_accuracy.png" style="width:100%;max-width:1100px"></div>
+ <div class="card wide"><img src="/figures/model_twin.png" style="width:100%;max-width:1100px"></div>
+ <div class="card wide"><h2>All models · same data, same inputs, same tests <span class="note">RMSE in mm, lower is better</span></h2>
+  <div style="overflow:auto"><table id="m-table"></table></div><div class="note" id="m-schemes"></div></div>
+ <div class="card wide"><h2>What each model is</h2><table id="m-expl"></table></div>
+ <div class="card"><h2>Which input matters (permutation importance)</h2><table id="m-imp"></table>
+  <div class="note">RMSE increase (mm) when one input is randomly shuffled. Same method for every model.</div></div>
+ <div class="card"><h2>Why actuator position is not an input</h2><div class="note" id="m-leak"></div></div>
+ <div class="card"><h2>Production model (frozen)</h2><div class="note" id="m-prod"></div></div>
+</div></div>"""
+
+LAB_JS = r"""
+const LCOL=['#2a78d6','#eb6834','#1baf7a','#eda100','#e87ba4','#008300','#6250d6','#e34948'];
+let labInit=false, labDS=[];
+async function initLab(){ if(labInit)return; labInit=true;
+ const r=await (await fetch('/api/lab/datasets')).json(); labDS=r.datasets;
+ const opts=r.datasets.map(d=>`<option value="${d.id}">${d.label}</option>`).join('');
+ document.getElementById('l-train').innerHTML=opts; document.getElementById('l-test').innerHTML=opts;
+ const sim=r.datasets.find(d=>d.id.startsWith('SIM:'));
+ if(sim)document.getElementById('l-test').value=sim.id;
+ const def=['M03F','M03','M09','M13'];
+ document.getElementById('l-models').innerHTML='<b>Models (max 8):</b> '+r.models.map(m=>`<label class="chk" title="${m.name}"><input type="checkbox" value="${m.key}" ${def.includes(m.key)?'checked':''} onchange="capModels(this)">${m.key} ${m.name}</label>`).join('');}
+function capModels(el){const on=[...document.querySelectorAll('#l-models input:checked')];if(on.length>8){el.checked=false;alert('Pick at most 8 models so each keeps its own colour.')}}
+async function runLab(){
+ const g=id=>document.getElementById(id).value, keys=[...document.querySelectorAll('#l-models input:checked')].map(i=>i.value);
+ if(!keys.length){alert('Choose at least one model');return}
+ const q=new URLSearchParams({train:g('l-train'),test:g('l-test'),models:keys.join(','),fk:g('l-fk'),fs:g('l-fs'),fst:g('l-fst'),fn:g('l-fn'),fnoise:g('l-fnoise'),fseed:g('l-fseed')});
+ const st=document.getElementById('l-status'); st.textContent='training and replaying the twin… (a few seconds; the Gaussian process is the slowest)';
+ const t0=performance.now(); const R=await (await fetch('/api/lab?'+q)).json();
+ if(R.error){st.innerHTML=`<span class="FAIL">${R.error}</span>`;return}
+ st.textContent=`done in ${((performance.now()-t0)/1000).toFixed(1)} s · ${R.method} · train ${R.n_train} units, test ${R.n_test} units`;
+ const syn=[R.train,R.test].some(id=>(labDS.find(d=>d.id==id)||{}).synthetic);
+ document.getElementById('l-badge').innerHTML=syn?'<span class="pill warn">uses SYNTHETIC data</span>':'<span class="pill ok">real REST data</span>';
+ document.getElementById('l-out').style.display='';
+ const tw=t=>{const s=t.status||'';const c=s=='HIT'||s.startsWith('no failure')?'PASS':s=='EARLY'?'WARN':'FAIL';
+  return `<span class="${c}">${s}</span>${t.error_units!=null?` (${t.error_units} units early)`:''}`};
+ const best=Math.min(...R.models.map(m=>m.rmse));
+ document.getElementById('l-table').innerHTML='<tr><th></th><th>model</th><th>RMSE mm</th><th>MAE</th><th>R²</th><th>bias</th><th>max error</th><th>first drift alarm</th><th>locked prediction</th><th>actual first failure</th><th>twin result</th></tr>'+
+  R.models.map((m,i)=>`<tr><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${LCOL[i]}"></span></td><td>${m.key} ${m.name}</td>
+  <td style="${m.rmse==best?'font-weight:700':''}">${m.rmse.toFixed(3)}</td><td>${m.mae.toFixed(3)}</td><td>${m.r2.toFixed(2)}</td><td>${m.bias>0?'+':''}${m.bias.toFixed(3)}</td><td>${m.max_err.toFixed(2)}</td>
+  <td>${m.twin.first_alarm||'–'}</td><td>${m.twin.predicted_unit?m.twin.predicted_unit+' <span class="note">(at '+m.twin.predicted_at+')</span>':'–'}</td><td>${m.twin.actual_failure||'none'}</td><td>${tw(m.twin)}</td></tr>`).join('');
+ const n=R.actual.length, xs=[...Array(n).keys()].map(i=>i+1);
+ const ds=[{label:'measured',data:R.actual.map((y,i)=>({x:i+1,y,u:R.unit_id[i]})),backgroundColor:'rgba(120,120,120,.45)',pointRadius:1.2}];
+ R.models.forEach((m,i)=>ds.push({label:m.key,data:m.pred.map((y,j)=>({x:j+1,y,u:R.unit_id[j]})),borderColor:LCOL[i],borderWidth:1.5,pointRadius:0,showLine:true}));
+ ds.push(hline(17,1,n,'#c0392b'),hline(13,1,n,'#c0392b'));
+ sc('l-pred',ds,'insertion depth (mm)',{});
+ const roll=(a,w)=>a.map((_,i)=>{const s=a.slice(Math.max(0,i-w+1),i+1);return s.reduce((p,c)=>p+c,0)/s.length});
+ sc('l-res',R.models.map((m,i)=>({label:m.key,data:roll(R.actual.map((y,j)=>y-m.pred[j]),25).map((y,j)=>({x:j+1,y:+y.toFixed(3),u:R.unit_id[j]})),borderColor:LCOL[i],borderWidth:1.5,pointRadius:0,showLine:true})),'mm',{});
+ document.getElementById('l-note').innerHTML=(R.same_data?'Training and test data are the same, so predictions come from 5-fold cross-validation (each unit is predicted by a model that did not see it). ':'')+
+  'Twin result = this model plugged in as the digital twin\'s baseline and replayed over the test units (first line only), with the same alarm and commit rules as production. '+
+  'Lab runs happen in memory only: nothing is written to the ledger and model.json stays frozen.';
+}
+"""
+
+MODELS_JS = r"""
+let mods=null;
+async function loadMods(){if(!mods)mods=await (await fetch('/api/models')).json();renderMods()}
+function renderMods(){
+ const R=mods, box={white:'<span class="PASS">white box</span>',grey:'<span class="WARN">grey box</span>',black:'<span class="FAIL">black box</span>'};
+ const f=v=>v>=1?`<b class="FAIL">${v.toFixed(2)}</b>`:v.toFixed(3);
+ const best=k=>Math.min(...R.models.map(m=>m.tests[k].rmse));
+ const cell=(m,k)=>{const v=m.tests[k].rmse;return `<td style="${v==best(k)?'font-weight:700':''}">${f(v)}</td>`};
+ document.getElementById('m-table').innerHTML='<tr><th>#</th><th>model</th><th>family</th><th>transparency</th><th>random</th><th>new lots</th><th>unseen setting</th><th>future</th><th>R² new lots</th><th>parameters</th><th>fit s</th><th>predict ms</th><th>twin: caught early</th><th>twin: false alarm</th></tr>'+
+  R.models.map(m=>{const t=R.twin[m.key];return `<tr style="${m.key=='M03'?'background:#eef4ff':''}"><td>${m.key}</td><td>${m.name}</td><td>${m.family}</td><td>${box[m.box]}</td>${cell(m,'random')}${cell(m,'new_lots')}${cell(m,'unseen')}${cell(m,'future')}
+   <td>${m.tests.new_lots.r2.toFixed(2)}</td><td>${m.n_parameters??'-'}</td><td>${m.fit_s.toFixed(2)}</td><td>${m.predict_ms_per_unit.toFixed(2)}</td>
+   <td>${t?t['caught_in_advance_%']+' %':'-'}</td><td>${t?(t.false_prediction_on_stable_line?'<b class="FAIL">yes</b>':'no'):'-'}</td></tr>`}).join('');
+ document.getElementById('m-schemes').innerHTML='<b>random</b>: 5-fold random split · <b>new lots</b>: leave one bag lot + reel out · <b>unseen setting</b>: leave one pressure / port level / OD level out (extrapolation) · <b>future</b>: train on first 70 % of the run, test on last 30 %. Bold = best in column.';
+ document.getElementById('m-expl').innerHTML='<tr><th>#</th><th>model</th><th>how it works</th><th>inside the model</th></tr>'+R.models.map(m=>{
+  const d=m.detail;let ins='';
+  if(d.coef)ins='intercept '+d.intercept+'; '+Object.entries(d.coef).map(([k,v])=>`${k} ${v>0?'+':''}${v}`).join(', ');
+  else if(d.importance)ins='importance: '+Object.entries(d.importance).map(([k,v])=>`${k} ${v}`).join(', ');
+  else if(d.rules)ins=`<details><summary>${d.rules.split('\n').length-1} lines of if-then rules</summary><pre style="font-size:10px">${d.rules}</pre></details>`;
+  else if(d.cells)ins=Object.keys(d.cells).length+' table cells';
+  return `<tr><td>${m.key}</td><td>${m.name}</td><td>${m.explanation}</td><td style="font-size:11px">${ins}</td></tr>`}).join('');
+ const P=R.permutation_importance, cols=Object.keys(Object.values(P)[0]);
+ document.getElementById('m-imp').innerHTML='<tr><th>model</th>'+cols.map(c=>`<th>${c.replace('_thou','').replace('_bar','')}</th>`).join('')+'</tr>'+
+  Object.entries(P).map(([k,v])=>`<tr><td>${k}</td>${cols.map(c=>`<td>${v[c].toFixed(3)}</td>`).join('')}</tr>`).join('');
+ document.getElementById('m-leak').innerHTML=`R² = ${R.leakage.r2_with_actuator} with actuator position alone. ${R.leakage.note}`;
+ const p=R.models.find(m=>m.key=='M03');
+ document.getElementById('m-prod').innerHTML=`depth_mm = ${p.detail.intercept} ${Object.entries(p.detail.coef).map(([k,v])=>`${v>0?'+':'−'} ${Math.abs(v)}·${k}`).join(' ')}<br>RMSE new lots ${p.tests.new_lots.rmse.toFixed(3)} mm · unseen ${p.tests.unseen.rmse.toFixed(3)} mm · ${p.n_parameters} parameters, each with a physical meaning.`;
+ const g=R.models.find(m=>m.key=='M09'), nn=R.models.find(m=>m.key=='M13');
+ document.getElementById('m-verdict').innerHTML=`<p><b>Keep the 4-coefficient linear model (M03) in production.</b> On settings it has already seen, the best machine-learning model (gradient boosting, ${g.tests.random.rmse.toFixed(3)} mm on a random split) is only
+  ${(p.tests.random.rmse-g.tests.random.rmse).toFixed(3)} mm better than M03 (${p.tests.random.rmse.toFixed(3)} mm). The remaining ≈ 0.16 mm is part-to-part noise that no model can predict from material and pressure data.</p>
+  <p>When a pressure or material level was <b>never seen in training</b>, tree models get ≈ 60 % worse, the lookup table can only return the average, and the neural network (${nn.tests.unseen.rmse.toFixed(1)} mm) and the
+  extended linear models break down, while M03 (${p.tests.unseen.rmse.toFixed(3)} mm) and the Gaussian process stay accurate. Inside the digital twin every real model catches about the same share of failures.</p>
+  <p>So machine learning adds validation effort (GAMP 5 category 5, model drift, explainability) without a measurable benefit here. The Gaussian process is the only credible alternative,
+  because it also gives its own uncertainty.</p>`;
+}
+"""
+
+PAGE = PAGE.replace("__ANALYSIS_HTML__", ANALYSIS_HTML + MODELS_HTML).replace("__ANALYSIS_JS__", ANALYSIS_JS + MODELS_JS + LAB_JS)
+PAGE = PAGE.replace("""<button class="tab" id="b-ana" onclick="show('ana')">Data analysis</button>""",
+                    """<button class="tab" id="b-ana" onclick="show('ana')">Data analysis</button><button class="tab" id="b-mod" onclick="show('mod')">Model comparison</button>""")
+PAGE = PAGE.replace("""function show(t){cur=t;document.getElementById('tab-live').style.display=t=='live'?'':'none';
+ document.getElementById('tab-ana').style.display=t=='ana'?'':'none';
+ document.getElementById('b-live').className='tab'+(t=='live'?' on':'');document.getElementById('b-ana').className='tab'+(t=='ana'?' on':'');
+ if(t=='ana'){loadAna();initLab();}}""", """function show(t){cur=t;for(const k of ['live','ana','mod']){document.getElementById('tab-'+k).style.display=t==k?'':'none';
+ document.getElementById('b-'+k).className='tab'+(t==k?' on':'')}
+ if(t=='ana'){loadAna();initLab();} if(t=='mod')loadMods(); if(t=='live')tick();}""")
+# only fetch when something changed, and not while the browser tab is hidden
+PAGE = PAGE.replace("""async function tick(){
+ const s=await (await fetch('/api/state')).json();""", """let lastTip=-1;
+async function tick(){
+ if(document.hidden)return;
+ const s=await (await fetch('/api/state?tip='+lastTip)).json();
+ if(s.unchanged)return; lastTip=s.tip;""")
 
 
 def _np(o):
     return o.item() if hasattr(o, "item") else str(o)
 
 
+def _gz(obj):
+    raw = obj if isinstance(obj, bytes) else json.dumps(obj, default=_np).encode()
+    return gzip.compress(raw, 5)
+
+
+class LiveState:
+    """Incremental view of the ledger: only entries newer than the last request are processed."""
+
+    def __init__(self, db, mode):
+        self.db, self.mode, self.lock = db, mode, threading.Lock()
+        self.led = Ledger(db, readonly=True)
+        self.seq, self.tip, self.body = 0, None, None
+        self.model, self.book, self.mons = None, MaterialBook(), {}
+        self.pred, self.eval, self.alerts = {}, {}, []
+
+    def current_tip(self):
+        return self.led.db.execute("SELECT coalesce(max(seq), 0) FROM ledger").fetchone()[0]
+
+    def get(self):
+        with self.lock:
+            tip = self.current_tip()
+            if tip == self.tip:
+                return tip, self.body
+            for r in self.led.db.execute("SELECT * FROM ledger WHERE seq > ? ORDER BY seq", (self.seq,)):
+                self._apply(dict(r))
+                self.seq = r["seq"]
+            ok, n, problem = self.led.verify()
+            self.tip, self.body = tip, _gz(self._build(ok, n, problem, tip))
+            return tip, self.body
+
+    def _apply(self, r):
+        kind = r["kind"]
+        if kind == "MODEL":
+            self.model = json.loads(r["payload"])
+            return
+        if r["mode"] != self.mode:
+            return
+        if kind == "BAG":
+            self.book.add_bag(json.loads(r["payload"]))
+        elif kind == "PVC":
+            self.book.add_pvc(json.loads(r["payload"]))
+        elif kind == "ASM" and self.model:
+            mon = self.mons.setdefault(r["line_id"], LineMonitor(r["line_id"], self.model))
+            mon.process(json.loads(r["payload"]), r["event_no"], self.book)
+        elif kind == "PREDICTION":
+            self.pred[r["line_id"]] = dict(json.loads(r["payload"]), entry_hash=r["entry_hash"], received_utc=r["received_utc"])
+        elif kind == "EVALUATION":
+            self.eval[r["line_id"]] = json.loads(r["payload"])
+        elif kind == "ALERT":
+            self.alerts.append(dict(json.loads(r["payload"]), line=r["line_id"], event_no=r["event_no"], utc=r["received_utc"]))
+
+    def _build(self, ok, n, problem, tip):
+        keys = ("event_no", "unit_id", "depth", "baseline", "resid", "cusum_pos", "cusum_neg", "nok", "follow_err",
+                "vision_offset", "pressure")
+        lines = {}
+        for line in LINES:
+            mon = self.mons.get(line)
+            lines[line] = {"units": [{k: u[k] for k in keys} for u in mon.units] if mon else [],
+                           "forecast": mon.last_forecast if mon else None,
+                           "prediction": self.pred.get(line), "evaluation": self.eval.get(line)}
+        mat = self.book.summary()
+        m = self.model or {}
+        return {"tip": tip, "mode": self.mode, "integrity": {"ok": ok, "entries": n, "problem": problem},
+                "model": {k: m.get(k) for k in ("version", "formula", "coef", "sigma_mm", "r2")},
+                "lines": lines, "alerts": self.alerts[-40:],
+                "materials": {"bag": {k: round(v["mean"], 5) for k, v in mat["bag_lots"].items()},
+                              "pvc": {k: round(v["mean"], 5) for k, v in mat["reels"].items()}}}
+
+
+def state(db_path, mode):
+    """Uncached full state (kept for tests)."""
+    return json.loads(gzip.decompress(LiveState(db_path, mode).get()[1]))
+
+
+_ANA_CACHE = {}
+
+
 def analysis_cached(db, mode):
     with Ledger(db, readonly=True).db as c:
         tip = c.execute("SELECT max(seq) FROM ledger").fetchone()[0]
     if _ANA_CACHE.get("key") != (db, mode, tip):
-        _ANA_CACHE.update(key=(db, mode, tip), value=json.dumps(analyze(db, mode), default=_np).encode())
+        _ANA_CACHE.update(key=(db, mode, tip), value=_gz(analyze(db, mode)))
     return _ANA_CACHE["value"]
+
+
+_STATIC = {}
+_LAB = {}
+
+
+def static(name, loader):
+    if name not in _STATIC:
+        _STATIC[name] = loader()
+    return _STATIC[name]
 
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if self.path.startswith("/api/state"):
-            body, ctype = json.dumps(state(self.server.db, self.server.mode), default=str).encode(), "application/json"
-        elif self.path.startswith("/api/analysis"):
-            body, ctype = analysis_cached(self.server.db, self.server.mode), "application/json"
+        url = urlparse(self.path)
+        gz, ctype, cache = True, "application/json", "no-store"
+        if url.path == "/api/state":
+            tip, body = self.server.live.get()
+            if parse_qs(url.query).get("tip", [""])[0] == str(tip):
+                body = _gz({"unchanged": True, "tip": tip})
+        elif url.path == "/api/analysis":
+            body = analysis_cached(self.server.db, self.server.mode)
+        elif url.path == "/api/lab/datasets":
+            body = _gz({"datasets": lab.datasets(), "models": [{"key": k, "name": n} for k, n in lab.NAMES.items()]})
+        elif url.path == "/api/lab":
+            q = {k: v[0] for k, v in parse_qs(url.query).items()}
+            key = url.query
+            if key not in _LAB:
+                try:
+                    keys = [k for k in q.get("models", "").split(",") if k in lab.NAMES][:8]
+                    if not keys:
+                        raise ValueError("choose at least one model")
+                    fake = {"kind": q.get("fk", "axis"), "slope": float(q.get("fs", 0.01)), "start": int(q.get("fst", 150)),
+                            "n": int(q.get("fn", 600)), "noise": float(q.get("fnoise", 0)), "seed": int(q.get("fseed", 1))}
+                    _LAB[key] = _gz(lab.run(q["train"], q["test"], keys, fake))
+                except Exception as e:  # report the reason to the page instead of a broken response
+                    _LAB[key] = _gz({"error": f"{type(e).__name__}: {e}"})
+                if len(_LAB) > 50:
+                    _LAB.pop(next(iter(_LAB)))
+            body = _LAB[key]
+        elif url.path == "/api/models":
+            if not os.path.exists("models_report.json"):
+                return self.send_error(404, "run: python3 models.py")
+            body = static("models", lambda: _gz(open("models_report.json", "rb").read()))
+        elif url.path.startswith("/figures/") and re.fullmatch(r"/figures/[\w\-]+\.png", url.path) \
+                and os.path.exists(url.path[1:]):
+            body, ctype, gz, cache = open(url.path[1:], "rb").read(), "image/png", False, "max-age=3600"
         else:
-            body, ctype = PAGE.encode(), "text/html; charset=utf-8"
+            body, ctype, cache = static("page", lambda: _gz(PAGE.encode())), "text/html; charset=utf-8", "no-cache"
         self.send_response(200)
         self.send_header("Content-Type", ctype)
+        self.send_header("Cache-Control", cache)
+        if gz:
+            self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
@@ -295,5 +520,8 @@ if __name__ == "__main__":
     a = ap.parse_args()
     srv = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
     srv.db, srv.mode = a.db or f"ledger_{a.mode}.db", a.mode
+    srv.live = LiveState(srv.db, a.mode)
+    # warm the caches in the background so the first click on every tab is instant
+    threading.Thread(target=lambda: (srv.live.get(), analysis_cached(srv.db, a.mode)), daemon=True).start()
     print(f"Dashboard: http://localhost:{a.port}  (ledger {srv.db}, read-only)")
     srv.serve_forever()

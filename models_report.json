@@ -1,0 +1,711 @@
+{
+ "n_units": 1800,
+ "target": "visual_inspection_mm",
+ "features_base": [
+  "port_mean_thou",
+  "od_mean_thou",
+  "pressure_bar"
+ ],
+ "features_full": [
+  "port_mean_thou",
+  "od_mean_thou",
+  "pressure_bar",
+  "port_sd_thou",
+  "od_sd_thou"
+ ],
+ "schemes": "random     5-fold random split (units from the same lot/reel appear in train and test)\n  new_lots   leave-one-production-lot-out (BAG_00k / Reel0k): new lots of known material levels\n  unseen     leave-one-LEVEL-out (a pressure, a bag-port level or an OD level never seen in training):\n             can the model extrapolate to a setting it has not seen?\n  future     train on the first 70 % of the run, test on the last 30 % (time order)",
+ "models": [
+  {
+   "key": "M00",
+   "name": "Average only",
+   "family": "reference",
+   "box": "white",
+   "explanation": "Predicts the overall mean depth for every unit. Any useful model must beat it.",
+   "tests": {
+    "random": {
+     "rmse": 0.3272647844837486,
+     "mae": 0.26011292283950616,
+     "r2": -0.0011744455053661618,
+     "max_err": 1.1552076388888892
+    },
+    "new_lots": {
+     "rmse": 0.3327407017693595,
+     "mae": 0.2610261613949352,
+     "r2": -0.011588209276443662,
+     "max_err": 1.1735565912117174
+    },
+    "unseen": {
+     "rmse": 0.3746526685846817,
+     "mae": 0.300178460185185,
+     "r2": -0.312105832474767,
+     "max_err": 1.2616241666666639
+    },
+    "future": {
+     "rmse": 0.33769165884448,
+     "mae": 0.26668024691358005,
+     "r2": -0.021124457902768068,
+     "max_err": 1.1680595238095215
+    }
+   },
+   "fit_s": 0.0001616249792277813,
+   "predict_ms_per_unit": 0.1715066796168685,
+   "train_r2": 0.0,
+   "n_parameters": null,
+   "detail": {}
+  },
+  {
+   "key": "M01",
+   "name": "Gap only (Gate 2 idea)",
+   "family": "linear",
+   "box": "white",
+   "explanation": "depth = a + b\u00b7(port ID \u2212 tube OD). The Gate 2 root cause as a single-variable straight line.",
+   "tests": {
+    "random": {
+     "rmse": 0.2508380681230777,
+     "mae": 0.2029680276195012,
+     "r2": 0.4118364591297696,
+     "max_err": 0.7947902518164636
+    },
+    "new_lots": {
+     "rmse": 0.2627507418323297,
+     "mae": 0.21039387798269124,
+     "r2": 0.3692172561050673,
+     "max_err": 0.8725514593359467
+    },
+    "unseen": {
+     "rmse": 0.2850353442481282,
+     "mae": 0.23139462068854136,
+     "r2": 0.24053347432831962,
+     "max_err": 0.9383780521564269
+    },
+    "future": {
+     "rmse": 0.2516154830511271,
+     "mae": 0.20105078716931934,
+     "r2": 0.43309180502942957,
+     "max_err": 0.8125358882308937
+    }
+   },
+   "fit_s": 0.00029020803049206734,
+   "predict_ms_per_unit": 0.1807308429852128,
+   "train_r2": 0.41454531772297687,
+   "n_parameters": 2,
+   "detail": {
+    "intercept": 15.3466,
+    "coef": {
+     "gap_thou": 0.1534
+    }
+   }
+  },
+  {
+   "key": "M02",
+   "name": "Gap + pressure",
+   "family": "linear",
+   "box": "white",
+   "explanation": "Adds the technician-set pressure to the gap.",
+   "tests": {
+    "random": {
+     "rmse": 0.18177945135739523,
+     "mae": 0.14443322385322335,
+     "r2": 0.6911121812187899,
+     "max_err": 0.7260050010693782
+    },
+    "new_lots": {
+     "rmse": 0.19913947459309897,
+     "mae": 0.15738186377687652,
+     "r2": 0.637668062616215,
+     "max_err": 0.7767396684326435
+    },
+    "unseen": {
+     "rmse": 0.19977627665393596,
+     "mae": 0.15973234503390474,
+     "r2": 0.6269225199720367,
+     "max_err": 0.7870781012388015
+    },
+    "future": {
+     "rmse": 0.18287760019901309,
+     "mae": 0.14568303167611088,
+     "r2": 0.7005260576949938,
+     "max_err": 0.6119579245042832
+    }
+   },
+   "fit_s": 0.00027120811864733696,
+   "predict_ms_per_unit": 0.18766249995678663,
+   "train_r2": 0.6922083169552825,
+   "n_parameters": 3,
+   "detail": {
+    "intercept": 13.658,
+    "coef": {
+     "gap_thou": 0.1534,
+     "pressure_bar": 0.4222
+    }
+   }
+  },
+  {
+   "key": "M03",
+   "name": "Port + OD + pressure (PRODUCTION)",
+   "family": "linear",
+   "box": "white",
+   "explanation": "Four coefficients, each with a physical meaning. This is the frozen model in model.json.",
+   "tests": {
+    "random": {
+     "rmse": 0.16586150764608756,
+     "mae": 0.13111154030294658,
+     "r2": 0.7428405888025724,
+     "max_err": 0.6207204250537242
+    },
+    "new_lots": {
+     "rmse": 0.18456480460304123,
+     "mae": 0.1467887608927472,
+     "r2": 0.6887641063440915,
+     "max_err": 0.6829016863690818
+    },
+    "unseen": {
+     "rmse": 0.18078796176723033,
+     "mae": 0.14282280781280746,
+     "r2": 0.6944725592133207,
+     "max_err": 0.6998440259677583
+    },
+    "future": {
+     "rmse": 0.16678747594790003,
+     "mae": 0.1308232660813217,
+     "r2": 0.7509050721586243,
+     "max_err": 0.626162462773463
+    }
+   },
+   "fit_s": 0.00027754204347729683,
+   "predict_ms_per_unit": 0.19004584290087223,
+   "train_r2": 0.7444647692416335,
+   "n_parameters": 4,
+   "detail": {
+    "intercept": -9.6444,
+    "coef": {
+     "port_mean_thou": 0.2602,
+     "od_mean_thou": -0.1259,
+     "pressure_bar": 0.4222
+    }
+   }
+  },
+  {
+   "key": "M04",
+   "name": "Linear + material variation",
+   "family": "linear",
+   "box": "white",
+   "explanation": "Adds lot/reel standard deviations (how uneven the bag ports and tube are).",
+   "tests": {
+    "random": {
+     "rmse": 0.16401008239835907,
+     "mae": 0.12933600724639388,
+     "r2": 0.7485496184852349,
+     "max_err": 0.591204174508043
+    },
+    "new_lots": {
+     "rmse": 0.18265884417046768,
+     "mae": 0.1441741651416528,
+     "r2": 0.6951590456101451,
+     "max_err": 0.6547577278570174
+    },
+    "unseen": {
+     "rmse": 6.369170617811824,
+     "mae": 3.3113364731527817,
+     "r2": -378.20754622104363,
+     "max_err": 14.525878306646671
+    },
+    "future": {
+     "rmse": 0.1643061074958871,
+     "mae": 0.1283336096482261,
+     "r2": 0.7582617211017512,
+     "max_err": 0.5937890711194331
+    }
+   },
+   "fit_s": 0.0003044579643756151,
+   "predict_ms_per_unit": 0.19441416021436453,
+   "train_r2": 0.7506506012479209,
+   "n_parameters": 6,
+   "detail": {
+    "intercept": -17.8819,
+    "coef": {
+     "port_mean_thou": 0.3082,
+     "od_mean_thou": -0.1261,
+     "pressure_bar": 0.4222,
+     "port_sd_thou": -0.293,
+     "od_sd_thou": 0.0044
+    }
+   }
+  },
+  {
+   "key": "M05",
+   "name": "Quadratic + interactions (ridge)",
+   "family": "linear",
+   "box": "white",
+   "explanation": "All squares and pairwise products of port, OD and pressure, with ridge shrinkage. 10 coefficients.",
+   "tests": {
+    "random": {
+     "rmse": 0.16023287319117904,
+     "mae": 0.12673260324171612,
+     "r2": 0.7599982293595167,
+     "max_err": 0.6090457252276327
+    },
+    "new_lots": {
+     "rmse": 0.178550389734882,
+     "mae": 0.14163195959033997,
+     "r2": 0.7087180943267835,
+     "max_err": 0.6526725239394153
+    },
+    "unseen": {
+     "rmse": 4.475295708655099,
+     "mae": 2.0193763596961674,
+     "r2": -186.22105112114443,
+     "max_err": 13.208771594917462
+    },
+    "future": {
+     "rmse": 0.16209368024980597,
+     "mae": 0.12731855300401845,
+     "r2": 0.7647280364053846,
+     "max_err": 0.6031155662125887
+    }
+   },
+   "fit_s": 0.0014414170291274786,
+   "predict_ms_per_unit": 0.26070832274854183,
+   "train_r2": 0.7634979537962753,
+   "n_parameters": 11,
+   "detail": {}
+  },
+  {
+   "key": "M06",
+   "name": "Lookup table (cell means)",
+   "family": "table",
+   "box": "white",
+   "explanation": "Average of each bag-level \u00d7 OD-level \u00d7 pressure cell of the experiment. Cannot handle a new level.",
+   "tests": {
+    "random": {
+     "rmse": 0.15990929803514672,
+     "mae": 0.1267417950127163,
+     "r2": 0.760966572455698,
+     "max_err": 0.6196400000000022
+    },
+    "new_lots": {
+     "rmse": 0.179660357685786,
+     "mae": 0.14273462546352136,
+     "r2": 0.7050852988066981,
+     "max_err": 0.6376071428571439
+    },
+    "unseen": {
+     "rmse": 0.3746526685846817,
+     "mae": 0.300178460185185,
+     "r2": -0.312105832474767,
+     "max_err": 1.2616241666666639
+    },
+    "future": {
+     "rmse": 0.16281567432749405,
+     "mae": 0.1274437985813365,
+     "r2": 0.762627482349501,
+     "max_err": 0.6068000000000016
+    }
+   },
+   "fit_s": 0.00038837501779198647,
+   "predict_ms_per_unit": 0.11909666005522013,
+   "train_r2": 0.7682994984856578,
+   "n_parameters": 27,
+   "detail": {
+    "cells": {
+     "H|H|3.5": 15.846,
+     "H|H|4.0": 16.054,
+     "H|H|4.5": 16.209,
+     "H|L|3.5": 16.208,
+     "H|L|4.0": 16.407,
+     "H|L|4.5": 16.535,
+     "H|M|3.5": 16.013,
+     "H|M|4.0": 16.209,
+     "H|M|4.5": 16.396,
+     "L|H|3.5": 15.273,
+     "L|H|4.0": 15.651,
+     "L|H|4.5": 15.916,
+     "L|L|3.5": 15.813,
+     "L|L|4.0": 15.992,
+     "L|L|4.5": 16.212,
+     "L|M|3.5": 15.534,
+     "L|M|4.0": 15.813,
+     "L|M|4.5": 16.055,
+     "M|H|3.5": 15.584,
+     "M|H|4.0": 15.825,
+     "M|H|4.5": 16.056,
+     "M|L|3.5": 16.025,
+     "M|L|4.0": 16.234,
+     "M|L|4.5": 16.393,
+     "M|M|3.5": 15.86,
+     "M|M|4.0": 16.009,
+     "M|M|4.5": 16.185
+    }
+   }
+  },
+  {
+   "key": "M07",
+   "name": "Decision tree (depth 4)",
+   "family": "tree",
+   "box": "white",
+   "explanation": "At most 16 if-then rules; can be printed and read. Steps, not slopes.",
+   "tests": {
+    "random": {
+     "rmse": 0.18225219681488217,
+     "mae": 0.14542113565022147,
+     "r2": 0.6895034714029382,
+     "max_err": 0.619640000000004
+    },
+    "new_lots": {
+     "rmse": 0.19986260424734403,
+     "mae": 0.1609577943102652,
+     "r2": 0.6350318330152906,
+     "max_err": 0.7493703703703734
+    },
+    "unseen": {
+     "rmse": 0.3106646081340242,
+     "mae": 0.26196241848955015,
+     "r2": 0.0978167387312916,
+     "max_err": 0.9546212121212161
+    },
+    "future": {
+     "rmse": 0.18869175407978736,
+     "mae": 0.1512724246433867,
+     "r2": 0.6811812498051983,
+     "max_err": 0.6083789473684309
+    }
+   },
+   "fit_s": 0.0006725410930812359,
+   "predict_ms_per_unit": 0.2123116608709097,
+   "train_r2": 0.7029877968498617,
+   "n_parameters": 31,
+   "detail": {
+    "rules": "|--- pressure_bar <= 3.750\n|   |--- port_mean_thou <= 174.000\n|   |   |--- od_mean_thou <= 169.250\n|   |   |   |--- port_mean_thou <= 173.500\n|   |   |   |   |--- value: [15.771]\n|   |   |   |--- port_mean_thou >  173.500\n|   |   |   |   |--- value: [15.840]\n|   |   |--- od_mean_thou >  169.250\n|   |   |   |--- od_mean_thou <= 170.750\n|   |   |   |   |--- value: [15.534]\n|   |   |   |--- od_mean_thou >  170.750\n|   |   |   |   |--- value: [15.273]\n|   |--- port_mean_thou >  174.000\n|   |   |--- od_mean_thou <= 170.750\n|   |   |   |--- od_sd_thou <= 0.373\n|   |   |   |   |--- value: [16.115]\n|   |   |   |--- od_sd_thou >  0.373\n|   |   |   |   |--- value: [15.937]\n|   |   |--- od_mean_thou >  170.750\n|   |   |   |--- port_sd_thou <= 0.394\n|   |   |   |   |--- value: [15.846]\n|   |   |   |--- port_sd_thou >  0.394\n|   |   |   |   |--- value: [15.584]\n|--- pressure_bar >  3.750\n|   |--- port_mean_thou <= 174.750\n|   |   |--- od_mean_thou <= 169.250\n|   |   |   |--- port_mean_thou <= 174.000\n|   |   |   |   |--- value: [16.102]\n|   |   |   |--- port_mean_thou >  174.000\n|   |   |   |   |--- value: [16.313]\n|   |   |--- od_mean_thou >  169.250\n|   |   |   |--- pressure_bar <= 4.250\n|   |   |   |   |--- value: [15.825]\n|   |   |   |--- pressure_bar >  4.250\n|   |   |   |   |--- value: [16.053]\n|   |--- port_mean_thou >  174.750\n|   |   |--- od_mean_thou <= 170.750\n|   |   |   |--- od_mean_thou <= 169.250\n|   |   |   |   |--- value: [16.471]\n|   |   |   |--- od_mean_thou >  169.250\n|   |   |   |   |--- value: [16.303]\n|   |   |--- od_mean_thou >  170.750\n|   |   |   |--- pressure_bar <= 4.250\n|   |   |   |   |--- value: [16.054]\n|   |   |   |--- pressure_bar >  4.250\n|   |   |   |   |--- value: [16.209]\n"
+   }
+  },
+  {
+   "key": "M08",
+   "name": "Random forest",
+   "family": "ensemble ML",
+   "box": "grey",
+   "explanation": "Average of 300 randomised trees. Explained only through feature importance.",
+   "tests": {
+    "random": {
+     "rmse": 0.16048117713206408,
+     "mae": 0.12698605357543588,
+     "r2": 0.7592538183213394,
+     "max_err": 0.573248855754084
+    },
+    "new_lots": {
+     "rmse": 0.18845296295627725,
+     "mae": 0.14929796184778638,
+     "r2": 0.6755125964551336,
+     "max_err": 0.6238132276928265
+    },
+    "unseen": {
+     "rmse": 0.28918868125304636,
+     "mae": 0.24617988261888823,
+     "r2": 0.21823938503691975,
+     "max_err": 0.9476238081550754
+    },
+    "future": {
+     "rmse": 0.16399674252818303,
+     "mae": 0.12982806310541248,
+     "r2": 0.759171181509573,
+     "max_err": 0.5792355466630426
+    }
+   },
+   "fit_s": 0.11011799983680248,
+   "predict_ms_per_unit": 13.81855749990791,
+   "train_r2": 0.829519631992329,
+   "n_parameters": 101430,
+   "detail": {
+    "importance": {
+     "port_mean_thou": 0.218,
+     "od_mean_thou": 0.231,
+     "pressure_bar": 0.337,
+     "port_sd_thou": 0.127,
+     "od_sd_thou": 0.088
+    }
+   }
+  },
+  {
+   "key": "M09",
+   "name": "Gradient boosting",
+   "family": "ensemble ML",
+   "box": "grey",
+   "explanation": "300 small trees, each correcting the previous ones' errors.",
+   "tests": {
+    "random": {
+     "rmse": 0.15395645712761766,
+     "mae": 0.12119822344866774,
+     "r2": 0.7784320077918052,
+     "max_err": 0.5831179234381647
+    },
+    "new_lots": {
+     "rmse": 0.1898072199406183,
+     "mae": 0.14969580963794363,
+     "r2": 0.6708321895162632,
+     "max_err": 0.6601827785341392
+    },
+    "unseen": {
+     "rmse": 0.28706584120918605,
+     "mae": 0.24426523246362825,
+     "r2": 0.22967456024896749,
+     "max_err": 0.8465845646059673
+    },
+    "future": {
+     "rmse": 0.15878027997517832,
+     "mae": 0.12551493880172018,
+     "r2": 0.7742482433701023,
+     "max_err": 0.5301349000240219
+    }
+   },
+   "fit_s": 0.11263587512075901,
+   "predict_ms_per_unit": 0.2727458393201232,
+   "train_r2": 0.8132405942567419,
+   "n_parameters": 4500,
+   "detail": {
+    "importance": {
+     "port_mean_thou": 0.225,
+     "od_mean_thou": 0.28,
+     "pressure_bar": 0.34,
+     "port_sd_thou": 0.107,
+     "od_sd_thou": 0.048
+    }
+   }
+  },
+  {
+   "key": "M10",
+   "name": "k-nearest neighbours (k=25)",
+   "family": "instance ML",
+   "box": "grey",
+   "explanation": "Average depth of the 25 most similar past units.",
+   "tests": {
+    "random": {
+     "rmse": 0.16268318445917448,
+     "mae": 0.12875091111111114,
+     "r2": 0.7526018001641055,
+     "max_err": 0.6415600000000001
+    },
+    "new_lots": {
+     "rmse": 0.18793940625709565,
+     "mae": 0.1488991011235955,
+     "r2": 0.6772787201258448,
+     "max_err": 0.6141999999999985
+    },
+    "unseen": {
+     "rmse": 0.24106923356487356,
+     "mae": 0.1976684814814815,
+     "r2": 0.45675619862761707,
+     "max_err": 0.8289600000000004
+    },
+    "future": {
+     "rmse": 0.16418565465373056,
+     "mae": 0.12908170370370378,
+     "r2": 0.7586160279496944,
+     "max_err": 0.6423199999999998
+    }
+   },
+   "fit_s": 0.0006226249970495701,
+   "predict_ms_per_unit": 0.3324750019237399,
+   "train_r2": 0.773421689607535,
+   "n_parameters": 9000,
+   "detail": {}
+  },
+  {
+   "key": "M11",
+   "name": "Support vector regression (RBF)",
+   "family": "kernel ML",
+   "box": "black",
+   "explanation": "Smooth non-linear surface in scaled feature space.",
+   "tests": {
+    "random": {
+     "rmse": 0.16237204380443349,
+     "mae": 0.1285605530935248,
+     "r2": 0.7535472208974915,
+     "max_err": 0.633527942664502
+    },
+    "new_lots": {
+     "rmse": 0.18908288914844507,
+     "mae": 0.14979348563191786,
+     "r2": 0.6733396963103504,
+     "max_err": 0.5866549975990161
+    },
+    "unseen": {
+     "rmse": 0.29805692609286577,
+     "mae": 0.23582900093188577,
+     "r2": 0.16955735756935186,
+     "max_err": 1.2094074395891354
+    },
+    "future": {
+     "rmse": 0.16378217981247978,
+     "mae": 0.1287781418347523,
+     "r2": 0.7598009389278084,
+     "max_err": 0.5866917506432152
+    }
+   },
+   "fit_s": 0.043026542058214545,
+   "predict_ms_per_unit": 0.29363084118813276,
+   "train_r2": 0.7703427949439768,
+   "n_parameters": 6775,
+   "detail": {}
+  },
+  {
+   "key": "M12",
+   "name": "Gaussian process",
+   "family": "kernel ML",
+   "box": "grey",
+   "explanation": "Bayesian smooth surface that also returns its own uncertainty.",
+   "tests": {
+    "random": {
+     "rmse": 0.15977465792823475,
+     "mae": 0.1264753637581399,
+     "r2": 0.7613689247609372,
+     "max_err": 0.6110774171075413
+    },
+    "new_lots": {
+     "rmse": 0.17868108395460516,
+     "mae": 0.14168107764270882,
+     "r2": 0.7082915167747111,
+     "max_err": 0.6424706886994009
+    },
+    "unseen": {
+     "rmse": 0.17569084438580923,
+     "mae": 0.13867715330356495,
+     "r2": 0.7114577158026156,
+     "max_err": 0.6757158314619094
+    },
+    "future": {
+     "rmse": 0.1624394166039696,
+     "mae": 0.12735985223008,
+     "r2": 0.7637233233314609,
+     "max_err": 0.6029686849256652
+    }
+   },
+   "fit_s": 1.9514225830789655,
+   "predict_ms_per_unit": 0.27789334300905466,
+   "train_r2": 0.7655675981156085,
+   "n_parameters": 5400,
+   "detail": {}
+  },
+  {
+   "key": "M13",
+   "name": "Neural network (MLP 32-16)",
+   "family": "neural net",
+   "box": "black",
+   "explanation": "Two hidden layers, 32 and 16 neurons: about 750 weights with no physical meaning.",
+   "tests": {
+    "random": {
+     "rmse": 0.175757040445255,
+     "mae": 0.13798521616553316,
+     "r2": 0.7112402433379428,
+     "max_err": 0.6511525634298678
+    },
+    "new_lots": {
+     "rmse": 0.21767787074448572,
+     "mae": 0.172288721268464,
+     "r2": 0.5670672265581733,
+     "max_err": 0.7333002211446971
+    },
+    "unseen": {
+     "rmse": 5.290277192468148,
+     "mae": 4.24975430690662,
+     "r2": -260.6182652848461,
+     "max_err": 15.678062756319164
+    },
+    "future": {
+     "rmse": 0.17833731958553325,
+     "mae": 0.14180903805550396,
+     "r2": 0.7152114782189127,
+     "max_err": 0.5933064684660696
+    }
+   },
+   "fit_s": 0.43676866707392037,
+   "predict_ms_per_unit": 0.25454083923250437,
+   "train_r2": 0.7340903725877275,
+   "n_parameters": 737,
+   "detail": {}
+  }
+ ],
+ "permutation_importance": {
+  "M03": {
+   "port_mean_thou": 0.114,
+   "od_mean_thou": 0.105,
+   "pressure_bar": 0.1232,
+   "port_sd_thou": 0.0,
+   "od_sd_thou": 0.0
+  },
+  "M08": {
+   "port_mean_thou": 0.0844,
+   "od_mean_thou": 0.1243,
+   "pressure_bar": 0.1588,
+   "port_sd_thou": 0.0283,
+   "od_sd_thou": 0.0293
+  },
+  "M09": {
+   "port_mean_thou": 0.0895,
+   "od_mean_thou": 0.1051,
+   "pressure_bar": 0.1418,
+   "port_sd_thou": 0.0197,
+   "od_sd_thou": 0.0213
+  },
+  "M13": {
+   "port_mean_thou": 2.8282,
+   "od_mean_thou": 0.3259,
+   "pressure_bar": 0.135,
+   "port_sd_thou": 2.779,
+   "od_sd_thou": 0.2489
+  }
+ },
+ "leakage": {
+  "r2_with_actuator": 0.9819,
+  "note": "Actuator endpoint explains 98 % of depth but is recorded together with the depth of the same unit, so it cannot predict a unit before it is made (target leakage)."
+ },
+ "twin": {
+  "M00": {
+   "scenarios": 18,
+   "caught_in_advance_%": 44.4,
+   "median_units_early": 11.5,
+   "false_prediction_on_stable_line": true,
+   "sigma_mm": 0.3271
+  },
+  "M03": {
+   "scenarios": 18,
+   "caught_in_advance_%": 77.8,
+   "median_units_early": 8.0,
+   "false_prediction_on_stable_line": false,
+   "sigma_mm": 0.1653
+  },
+  "M05": {
+   "scenarios": 18,
+   "caught_in_advance_%": 77.8,
+   "median_units_early": 10.5,
+   "false_prediction_on_stable_line": false,
+   "sigma_mm": 0.1591
+  },
+  "M06": {
+   "scenarios": 18,
+   "caught_in_advance_%": 77.8,
+   "median_units_early": 10.5,
+   "false_prediction_on_stable_line": false,
+   "sigma_mm": 0.1574
+  },
+  "M08": {
+   "scenarios": 18,
+   "caught_in_advance_%": 77.8,
+   "median_units_early": 13.5,
+   "false_prediction_on_stable_line": false,
+   "sigma_mm": 0.135
+  },
+  "M09": {
+   "scenarios": 18,
+   "caught_in_advance_%": 77.8,
+   "median_units_early": 9.5,
+   "false_prediction_on_stable_line": false,
+   "sigma_mm": 0.1413
+  },
+  "M13": {
+   "scenarios": 18,
+   "caught_in_advance_%": 83.3,
+   "median_units_early": 13.0,
+   "false_prediction_on_stable_line": false,
+   "sigma_mm": 0.1686
+  }
+ }
+}

@@ -118,8 +118,9 @@ def next_unit_id(unit_id, k):
 
 # ---------------------------------------------------------------- per-line monitor
 class LineMonitor:
-    def __init__(self, line_id, model):
+    def __init__(self, line_id, model, baseline_fn=None):
         self.line_id, self.model, self.cfg = line_id, model, model["detector"]
+        self.baseline_fn = baseline_fn  # optional alternative baseline (model comparison only)
         self.units = []                 # processed completed units (derived values, source kept in ledger)
         self.cp = self.cn = 0.0         # CUSUM statistics
         self.first_failure = None       # first actual NOK unit
@@ -130,7 +131,7 @@ class LineMonitor:
         m = self.model
         port, port_known = book.port_mean(rec["bag_lot_id"], m)
         od, od_known = book.od_mean(rec["reel_id"], m)
-        base = baseline(m, port, od, rec["pressure_bar"])
+        base = self.baseline_fn(rec, port, od) if self.baseline_fn else baseline(m, port, od, rec["pressure_bar"])
         y = rec["visual_inspection_mm"]
         target = rec["insertion_target_cm"] * 10
         lsl, usl = target - TOL_MM, target + TOL_MM
