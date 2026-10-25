@@ -138,6 +138,7 @@ const MODE_TXT = {
   REALTIME: 'Showing live data received during the jury run.',
 };
 function renderHeader(s) {
+  if (s.waiting) { $('hdr-pills').innerHTML = `<span class="pill" data-tip="Start monitor.py; this page fills in automatically.">Data: ${s.mode} · waiting for the first records…</span>`; return; }
   const ok = s.integrity.ok;
   $('hdr-pills').innerHTML =
     `<span class="pill" data-tip="${MODE_TXT[s.mode] || ''}">Data: ${s.mode}</span>` +
@@ -151,7 +152,9 @@ async function renderHow() {
   $('glossary').innerHTML = Object.values(GL).map(([t, d]) => `<tr><th>${t}</th><td>${d}</td></tr>`).join('');
   $('urs-rerun').onclick = renderHow;
   $('urs-time').textContent = 'checking…';
-  const [U, Q] = await Promise.all([(await fetch('/api/urs')).json(), (await fetch('/api/quickunits')).json()]);
+  const [U, Q0] = await Promise.all([(await fetch('/api/urs')).json(), (await fetch('/api/quickunits')).json()]);
+  if (U.error) { $('urs').innerHTML = `<tr><td class="note">${esc(U.error)}</td></tr>`; $('urs-time').textContent = ''; return; }
+  const Q = Array.isArray(Q0) ? Q0 : [];
   const pick = k => (Q.find(q => q.kind === k) || {}).unit_id;
   const anyUnit = pick('PREDICTION') || pick('EVALUATION') || pick('EXTREME') || pick('FIRST');
   const lockLine = (Q.find(q => q.kind === 'PREDICTION') || {line: 'ASM-01'}).line;
@@ -165,7 +168,7 @@ async function renderHow() {
        showme('Header › “Records intact” badge', 'live', 'hdr-pills'), showme('Data explorer › timestamps per source', 'data', 'd-timing')]],
     'URS-DI-003': ['A drift alarm meter (CUSUM) and a trend line watch the difference between measured and expected depth. On a drift, the first out-of-spec Unit ID is forecast and locked once, with line, predicted unit, current unit and UTC time.',
       [showme('Live monitor › drift alarm meter', 'live', 'c-' + lockLine), hasPred ? showme('Live monitor › locked prediction', 'live', 'lk-' + lockLine) : '',
-       showme('Live monitor › system messages (alarms)', 'live', 'alerts'), showme('Data explorer › synthetic failure runs', 'data', 'd-sim-card'),
+       showme('Live monitor › system messages (alarms)', 'live', 'alerts'), U.mode !== 'SIM' ? showme('Data explorer › synthetic failure runs', 'data', 'd-sim-card') : '',
        showme('Model lab › where each model predicts the failure', 'lab', 'l-run')]],
     'URS-DI-004': ['Each unit record names its bag lot and tube reel, which link to their BAG-01 / PVC-01 measurements; predictions and inspection results are stored with line and Unit ID.',
       [showme('Audit trail › full chain for a unit', 'audit', 'trace-chain', anyUnit), showme('Data explorer › traceability checks', 'data', 'd-checks')]],
@@ -410,7 +413,12 @@ function renderProduction() {
 /* ------------------------------------------------------------------ DATA EXPLORER */
 let ana = null;
 async function loadData() {
-  if (!ana) { $('kpis').innerHTML = '<div class="card note">Loading the analysis…</div>'; ana = await (await fetch('/api/analysis')).json(); }
+  if (!ana) {
+    $('kpis').innerHTML = '<div class="card note">Loading the analysis…</div>';
+    const r = await (await fetch('/api/analysis')).json();
+    if (r.error) { $('kpis').innerHTML = `<div class="card note">${esc(r.error)}</div>`; return; }
+    ana = r;
+  }
   const sel = $('d-line'), avail = Object.keys(ana.lines).filter(l => ana.lines[l]);
   if (!sel.options.length) { sel.innerHTML = avail.map(l => `<option>${l}</option>`).join(''); sel.onchange = renderData; }
   renderData();
@@ -717,7 +725,8 @@ async function loadAudit() {
   auditInit = true;
   $('unit-go').onclick = () => traceUnit($('unit-in').value);
   $('unit-in').onkeydown = e => { if (e.key === 'Enter') traceUnit($('unit-in').value); };
-  const Q = await (await fetch('/api/quickunits')).json();
+  const Q0 = await (await fetch('/api/quickunits')).json(), Q = Array.isArray(Q0) ? Q0 : [];
+  if (Q0.error) { auditInit = false; $('trace').innerHTML = `<p class="note">${esc(Q0.error)}</p>`; return; }
   const LBL = {PREDICTION: 'predicted failure', EVALUATION: 'actual first failure', EXTREME: 'furthest from target', FIRST: 'first unit'};
   const seen = new Set();
   $('quick').innerHTML = 'Try: ' + Q.filter(q => !seen.has(q.unit_id) && seen.add(q.unit_id)).slice(0, 8)
@@ -726,7 +735,7 @@ async function loadAudit() {
   $('verify-go').onclick = async () => {
     $('verify-out').textContent = 'checking every fingerprint…';
     const v = await (await fetch('/api/verify')).json();
-    $('verify-out').innerHTML = v.ok ? `<span class="pill ok">✓ intact</span> ${fmt(v.entries)} records verified at ${v.checked_utc.replace('T', ' ').slice(0, 19)} UTC`
+    $('verify-out').innerHTML = v.error ? esc(v.error) : v.ok ? `<span class="pill ok">✓ intact</span> ${fmt(v.entries)} records verified at ${v.checked_utc.replace('T', ' ').slice(0, 19)} UTC`
       : `<span class="pill bad">✖ BROKEN</span> ${esc(v.problem)}`;
   };
   $('ledger-kind').onchange = () => { ledgerBefore = null; $('ledger').innerHTML = ''; loadLedger(); };
@@ -736,6 +745,7 @@ async function loadAudit() {
 async function loadLedger() {
   const k = $('ledger-kind').value || '';
   const L = await (await fetch(`/api/ledger?limit=40&kind=${k}` + (ledgerBefore ? `&before=${ledgerBefore}` : ''))).json();
+  if (L.error) { $('ledger').innerHTML = `<tr><td class="note">${esc(L.error)}</td></tr>`; $('ledger-more').style.display = 'none'; return; }
   if (!$('ledger-kind').options.length)
     $('ledger-kind').innerHTML = '<option value="">all kinds</option>' + Object.entries(L.kinds).map(([kk, c]) => `<option value="${kk}">${kk} (${fmt(c)})</option>`).join('');
   if (!$('ledger').innerHTML) $('ledger').innerHTML = '<tr><th>#</th><th>kind</th><th>record ID</th><th>unit</th><th>source time</th><th>received (UTC)</th><th>fingerprint</th></tr>';
@@ -754,7 +764,7 @@ async function traceUnit(id) {
   $('trace').innerHTML = '<p class="note">tracing…</p>';
   const T = await (await fetch('/api/unit?id=' + encodeURIComponent(id))).json();
   if (T.error) {
-    $('trace').innerHTML = `<p class="FAIL">${esc(T.error)}</p>` + (T.suggestions.length ? '<p>Did you mean: ' +
+    $('trace').innerHTML = `<p class="FAIL">${esc(T.error)}</p>` + ((T.suggestions || []).length ? '<p>Did you mean: ' +
       T.suggestions.map(s => `<button class="small" data-unit="${s}">${s}</button>`).join(' ') + '</p>' : '');
     $('trace').querySelectorAll('[data-unit]').forEach(b => b.onclick = () => traceUnit(b.dataset.unit));
     return;

@@ -49,7 +49,7 @@ class LiveState:
 
     def __init__(self, db, mode):
         self.db, self.mode, self.lock = db, mode, threading.Lock()
-        self.led = Ledger(db, readonly=True)
+        self.led = None                  # opened once the monitor has created the ledger
         self.seq, self.tip, self.body = 0, None, None
         self.model, self.book, self.mons = None, MaterialBook(), {}
         self.pred, self.eval, self.alerts = {}, {}, []
@@ -59,6 +59,10 @@ class LiveState:
 
     def get(self):
         with self.lock:
+            if self.led is None:
+                if not os.path.exists(self.db):
+                    return 0, _gz(self._build(True, 0, None, 0) | {"waiting": True})
+                self.led = Ledger(self.db, readonly=True)
             tip = self.current_tip()
             if tip == self.tip:
                 return tip, self.body
@@ -116,11 +120,19 @@ def state(db_path, mode):
 _ANA_CACHE = {}
 
 
+WAITING = "No data yet. Start the monitor (python3 monitor.py --mode {mode} ...); this page fills in automatically."
+
+
 def analysis_cached(db, mode):
+    if not os.path.exists(db):
+        return _gz({"error": WAITING.format(mode=mode), "waiting": True})
     with Ledger(db, readonly=True).db as c:
         tip = c.execute("SELECT max(seq) FROM ledger").fetchone()[0]
     if _ANA_CACHE.get("key") != (db, mode, tip):
-        _ANA_CACHE.update(key=(db, mode, tip), value=_gz(analyze(db, mode)))
+        try:
+            _ANA_CACHE.update(key=(db, mode, tip), value=_gz(analyze(db, mode)))
+        except Exception as e:  # e.g. the monitor has only just started writing
+            return _gz({"error": f"Analysis not available yet ({type(e).__name__}: {e}).", "waiting": True})
     return _ANA_CACHE["value"]
 
 
@@ -138,7 +150,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urlparse(self.path)
         gz, ctype, cache = True, "application/json", "no-store"
-        if url.path == "/api/state":
+        needs_ledger = url.path in ("/api/urs", "/api/unit", "/api/quickunits", "/api/ledger", "/api/verify", "/api/export")
+        if needs_ledger and not os.path.exists(self.server.db):
+            body = _gz({"error": WAITING.format(mode=self.server.mode), "waiting": True})
+        elif url.path == "/api/state":
             tip, body = self.server.live.get()
             if parse_qs(url.query).get("tip", [""])[0] == str(tip):
                 body = _gz({"unchanged": True, "tip": tip})

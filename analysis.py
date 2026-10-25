@@ -54,7 +54,8 @@ def _timing(df, name):
 def analyze(db, mode, sim_db="ledger_SIM.db"):
     led = Ledger(db, readonly=True)
     ok, n_entries, problem = led.verify()
-    model = json.loads(led.rows(kind="MODEL")[-1]["payload"])
+    models = led.rows(kind="MODEL")
+    model = json.loads(models[-1]["payload"]) if models else json.load(open("model.json"))
     bag, pvc = _frame(led, "BAG", mode), _frame(led, "PVC", mode)
     out = {"mode": mode, "integrity": {"ok": ok, "entries": n_entries, "problem": problem},
            "raw_responses": len(led.rows(kind="RAW_RESPONSE", mode=mode)), "timing": [], "checks": [], "lines": {}}

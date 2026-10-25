@@ -40,6 +40,8 @@ The dashboard only processes ledger entries that are new since the last refresh,
 and skips refreshes when nothing has changed or the browser tab is hidden. A live update takes about 1 ms and
 50 KB, down from 1.1 s and 390 KB.
 Use `--limit 1` in REALTIME so each prediction is committed before the next unit is requested.
+The dashboard can be started before or after the monitor. Without data it shows "waiting for the first records…" and
+fills in by itself as soon as the monitor writes to the ledger.
 
 ## Model (no black box)
 1. Baseline from HISTORICAL data (DOE: 3 bag-port levels × 9 tube reels × 3 pressures, R² 0.74):

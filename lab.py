@@ -236,7 +236,9 @@ def run(train, test, keys, fake, max_points=1800):
         else:
             pred = make(key).fit(d_tr, d_tr.y).predict(d_te)
         full = make(key).fit(d_tr, d_tr.y)
-        sigma = float(np.std(d_tr.y.values - full.predict(d_tr)))
+        # the frozen production model keeps its frozen noise level, exactly like the live monitor;
+        # retrained models take theirs from the training data (so a drifting training set inflates it)
+        sigma = full.m["sigma_mm"] if key == FROZEN else float(np.std(d_tr.y.values - full.predict(d_tr)))
         e = d_te.y.values - pred
         ok = (d_te.y >= 13) & (d_te.y <= 17)
         res["models"].append({
