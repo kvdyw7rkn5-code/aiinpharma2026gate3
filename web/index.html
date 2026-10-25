@@ -41,7 +41,7 @@
       <div class="step"><div class="num">4</div><h3>Watch the difference</h3>
         <p>Measured minus expected depth is just noise on a healthy line. The <span class="term" data-term="cusum">drift alarm meter</span> spots when it keeps moving one way: <span class="term" data-term="drift">drift</span>.</p></div>
       <div class="step"><div class="num">5</div><h3>Forecast and lock</h3>
-        <p>The drift is extended forward to find the first unit likely to fall outside 13–17 mm. That unit is <span class="term" data-term="lock">locked</span> with a timestamp before it is made.</p></div>
+        <p>For every unit the system computes the chance that the next one falls outside 13–17 mm (expected depth plus the smoothed recent drift). When it reaches 10 %, the unit 3 ahead is <span class="term" data-term="lock">locked</span> with a timestamp before it is made. The jury scores the error E = |Z − X| and the <span class="term" data-term="lead">lead time</span> L = X − Y.</p></div>
       <div class="step"><div class="num">6</div><h3>Check against reality</h3>
         <p>When the camera measures that unit, the system records whether the prediction was a HIT, <span class="term" data-term="early">EARLY, LATE or MISSED</span>.</p></div>
     </div>

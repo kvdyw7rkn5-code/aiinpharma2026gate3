@@ -107,8 +107,10 @@ class Twin:
               "actual_depth_mm": u["depth"], "limits_mm": [u["lsl"], u["usl"]]}
         if pred:
             off = u["event_no"] - (pred["current_event_no"] + pred["units_ahead"])
+            # Jury metrics (RULES.md): X = predicted, Y = current at lock, Z = actual first failure
             ev |= {"predicted_unit_id": pred["predicted_unit_id"], "exact_hit": pred["predicted_unit_id"] == u["unit_id"],
                    "error_units": off, "lead_units": u["event_no"] - pred["current_event_no"],
+                   "E_abs_error_units": abs(off), "L_lead_units": pred["units_ahead"],
                    "status": "HIT" if off == 0 else ("EARLY" if off > 0 else "LATE")}
         else:
             ev |= {"predicted_unit_id": None, "status": "MISSED (failure before any prediction)"}

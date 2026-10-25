@@ -293,7 +293,7 @@ def twin_check(d, keys=("M00", "M03", "M05", "M06", "M08", "M09", "M13")):
         res = d.y.values - m.predict(d)
         cfg = copy.deepcopy(frozen)
         cfg["sigma_mm"] = float(res.std())
-        caught, errs, false_pred = 0, [], 0
+        caught, errs, leads, false_pred = 0, [], [], 0
         for slope, seed in scenarios:
             recs = decalibrate(hist, "ASM-01", "T", 60 + 37 * seed, slope, "axis", n=900, seed=seed)
             idx, _ = first_failure(recs)
@@ -304,7 +304,8 @@ def twin_check(d, keys=("M00", "M03", "M05", "M06", "M08", "M09", "M13")):
                 if u["nok"]:
                     break
                 if pred_at is None and mon.should_commit():
-                    pred_at = i + 1 + mon.last_forecast["k_first_fail"]
+                    leads.append(mon.last_forecast["k_first_fail"])
+                    pred_at = i + 1 + leads[-1]
             if pred_at is not None:
                 caught += 1
                 errs.append(idx + 1 - pred_at)
@@ -314,8 +315,14 @@ def twin_check(d, keys=("M00", "M03", "M05", "M06", "M08", "M09", "M13")):
             if mon.should_commit():
                 false_pred = 1
                 break
+        # Jury metrics (RULES.md): E = |Z - X| over all scenarios (a miss counts as E > 2), L = X - Y
+        es = np.abs(errs)
         out[key] = {"scenarios": len(scenarios), "caught_in_advance_%": round(100 * caught / len(scenarios), 1),
                     "median_units_early": float(np.median(errs)) if errs else None,
+                    "E<=2_%": round(100 * float((es <= 2).sum()) / len(scenarios), 1),
+                    "median_E": float(np.median(es)) if errs else None,
+                    "mean_L": round(float(np.mean(leads)), 1) if leads else None,
+                    "estimator": cfg["detector"].get("estimator"),
                     "false_prediction_on_stable_line": bool(false_pred), "sigma_mm": round(cfg["sigma_mm"], 4)}
         print("twin", key, out[key])
     return out

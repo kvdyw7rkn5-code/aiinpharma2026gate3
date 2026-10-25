@@ -21,6 +21,13 @@ Every number the model produces can be traced to a formula a reviewer can recomp
    this catches 80 % of failures before they happen, erring early rather than late -- patient safety first).
 5. Commit (once per line, immutable) when the drift alarm has held for 3 consecutive units and either that k <= horizon
    or P(next unit fails) >= p_next_commit.
+
+Alternative commit rule, detector "estimator": "holt_next" (tuned for the jury metrics E = |Z - X|, L = X - Y):
+   Holt smoothing of the residual (level l, trend t):
+       l_n = alpha*r_n + (1-alpha)*(l_{n-1} + t_{n-1});   t_n = beta*(l_n - l_{n-1}) + (1-beta)*t_{n-1}
+   P(next unit fails) from depth ~ N(current baseline + l + t, sigma^2 + level variance).
+   Commit when it reaches p_next_commit and predict X = current unit + lead_units.
+   It follows a drift without waiting for the CUSUM/slope alarm, so it locks later but closer to the failure.
 """
 import json
 import math
@@ -58,8 +65,11 @@ def fit_baseline(asm, pvc, bag):
         "n_train": len(y),
         "pop_port_in": round(float(np.mean(list(port.values()))), 6),
         "pop_od_in": round(float(np.mean(list(od.values()))), 6),
+        # estimator "holt_next" won validate.py on the jury metrics (E<=2 26 % vs 13 % for "quantile", same misses);
+        # "quantile" uses horizon_units / quantile and p_next_commit 0.5
         "detector": {"window": 30, "min_points": 12, "max_segment": 120, "t_alarm": 3.0, "cusum_k": 0.5, "cusum_h": 5.0, "persist_units": 3,
-                     "horizon_units": 3, "p_next_commit": 0.5, "estimator": "quantile", "quantile": 0.05, "max_lookahead": 300},
+                     "horizon_units": 3, "p_next_commit": 0.1, "estimator": "holt_next", "quantile": 0.05, "max_lookahead": 300,
+                     "holt_alpha": 0.3, "holt_beta": 0.05, "lead_units": 3},
     }
 
 
@@ -126,7 +136,7 @@ class LineMonitor:
         self.first_failure = None       # first actual NOK unit
         self.last_forecast = None
         self.alarm_run = 0              # consecutive units with drift alarm active
-
+        self.holt_l = self.holt_t = 0.0  # Holt level / trend of the residual (estimator "holt_next")
     def process(self, rec, event_no, book):
         m = self.model
         port, port_known = book.port_mean(rec["bag_lot_id"], m)
@@ -140,6 +150,10 @@ class LineMonitor:
         k, h = self.cfg["cusum_k"], self.cfg["cusum_h"]
         self.cp = max(0.0, self.cp + z - k)
         self.cn = max(0.0, self.cn - z - k)
+        a, b = self.cfg.get("holt_alpha", 0.3), self.cfg.get("holt_beta", 0.05)
+        prev_l = self.holt_l
+        self.holt_l = a * resid + (1 - a) * (self.holt_l + self.holt_t)
+        self.holt_t = b * (self.holt_l - prev_l) + (1 - b) * self.holt_t
         nok = not (lsl <= y <= usl)
         u = dict(event_no=event_no, unit_id=rec["unit_id"], time=rec["time"], depth=y, baseline=round(base, 4),
                  resid=round(resid, 4), cusum_pos=round(self.cp, 3), cusum_neg=round(self.cn, 3),
@@ -208,17 +222,29 @@ class LineMonitor:
             if k <= 60:
                 path.append({"k": k, "mu": round(mu, 4), "lo": round(mu - 2 * sd, 4), "hi": round(mu + 2 * sd, 4),
                              "p_fail": round(p, 5)})
+        # Holt next-unit risk: current baseline + smoothed residual level and trend
+        holt_mu = last["baseline"] + self.holt_l + self.holt_t
+        holt_sd = sig0 * math.sqrt(1 + cfg.get("holt_alpha", 0.3) / (2 - cfg.get("holt_alpha", 0.3)))
+        p_holt = PHI((last["lsl"] - holt_mu) / holt_sd) + 1 - PHI((last["usl"] - holt_mu) / holt_sd)
+        holt = cfg.get("estimator") == "holt_next"
+        # A drift-rate-based lead and a 2-unit persistence were tried in validate.py; both scored worse
+        k_ff = cfg.get("lead_units", 3) if holt else {"mode": best_k, "median": med_k}.get(cfg.get("estimator"), q_k)
         return {"slope_mm_per_unit": round(float(b), 5), "t_slope": round(float(t_slope), 2),
                 "level_mm": round(float(a + b * x_last), 4), "noise_sd": round(s, 4),
                 "cusum_alarm": cusum_alarm, "drift_alarm": alarm,
-                "k_first_fail": {"mode": best_k, "median": med_k}.get(cfg.get("estimator"), q_k), "k_mode": best_k, "k_median": med_k, "p_at_k": round(best_f, 4), "p_fail_within_lookahead": round(cum, 4),
-                "p_next": path[0]["p_fail"] if path else None,
-                "direction": "TOO_DEEP" if b > 0 else "TOO_SHALLOW", "path": path}
+                "k_first_fail": k_ff, "k_mode": best_k, "k_median": med_k, "p_at_k": round(best_f, 4), "p_fail_within_lookahead": round(cum, 4),
+                "p_next": round(p_holt, 5) if holt else (path[0]["p_fail"] if path else None),
+                "p_next_line": path[0]["p_fail"] if path else None, "p_next_holt": round(p_holt, 5),
+                "holt_level_mm": round(self.holt_l, 4), "holt_trend_mm": round(self.holt_t, 5),
+                "direction": ("TOO_DEEP" if holt_mu > (last["lsl"] + last["usl"]) / 2 else "TOO_SHALLOW") if holt
+                             else ("TOO_DEEP" if b > 0 else "TOO_SHALLOW"), "path": path}
 
     def should_commit(self):
         f = self.last_forecast
         if not f or f["k_first_fail"] is None:
             return False
+        if self.cfg.get("estimator") == "holt_next":
+            return f["p_next_holt"] >= self.cfg["p_next_commit"]
         return self.alarm_run >= self.cfg["persist_units"] and (f["k_first_fail"] <= self.cfg["horizon_units"] or f["p_next"] >= self.cfg["p_next_commit"])
 
 

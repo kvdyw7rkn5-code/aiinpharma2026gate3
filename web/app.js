@@ -25,7 +25,8 @@ const GL = {
   lock: ['Locked prediction', 'The device we predict will be the first out of spec. Saved once, with a timestamp and fingerprint, before that device is made. It can never be changed.'],
   early: ['Prediction result', 'HIT = exactly the right device. EARLY = the warning came before the real failure (safe side). LATE = after it. MISSED = the failure came before any prediction.'],
   falsealarm: ['False alarm', 'A prediction was locked but no device actually went out of spec.'],
-  lead: ['Lead time', 'How many devices before the real failure the warning came.'],
+  lead: ['Lead time (L)', 'L = X − Y: how many devices ahead of the last inspected device the locked prediction points. Jury metric, together with the error E = |Z − X|.'],
+  jury: ['Jury score', 'X = predicted device, Y = last device inspected when the prediction was locked, Z = actual first failure. Error E = |Z − X| (smaller is better), lead time L = X − Y.'],
   rmse: ['Typical error (RMSE)', 'Root-mean-square difference between predicted and measured depth, in mm. Lower is better. About 0.17 mm is normal part-to-part noise.'],
   bias: ['Bias', 'Average of measured − predicted. Far from 0 means the model is systematically too high or too low, for example because the line drifted.'],
   r2: ['R²', 'Share of the depth variation the model explains. 1 = perfect, 0 = no better than always guessing the average.'],
@@ -205,10 +206,17 @@ const STATUS = {
 };
 function resultText(e) {
   if (!e.predicted_unit_id) return 'No prediction had been locked before it (MISSED).';
+  const jury = e.E_abs_error_units != null ? ` ${term('jury', 'Jury score')}: E = ${e.E_abs_error_units}, L = ${e.L_lead_units}.` : '';
+  return resultText0(e) + jury;
+}
+function resultText0(e) {
   if (e.status === 'HIT') return `We had predicted <b>${e.predicted_unit_id}</b>: exactly right (HIT).`;
   if (e.error_units > 0) return `We had predicted <b>${e.predicted_unit_id}</b>, ${e.error_units} devices earlier: the warning came early, on the safe side (EARLY).`;
   return `We had predicted <b>${e.predicted_unit_id}</b>, ${-e.error_units} devices too late (LATE).`;
 }
+// Commit rule from model.json (holt_next: lock when P(next device fails) >= p_next_commit, predict lead_units ahead)
+const rule = () => { const d = (live && live.model && live.model.detector) || {};
+  return {holt: d.estimator === 'holt_next', p: d.p_next_commit ?? 0.1, lead: d.lead_units ?? 3}; };
 function lineStatus(L) {
   const u = L.units, f = L.forecast, p = L.prediction, e = L.evaluation;
   if (!u.length) return {s: 'idle', text: 'No devices received from this line yet.'};
@@ -218,8 +226,9 @@ function lineStatus(L) {
     `locked while ${p.current_unit_id} was being made. Waiting for the camera to confirm.`};
   if (f && f.drift_alarm) return {s: 'warn', text: `Depth is drifting <b>${f.slope_mm_per_unit > 0 ? 'deeper' : 'shallower'}</b> by about ` +
     `${Math.abs(f.slope_mm_per_unit * 100).toFixed(1)} mm per 100 devices. ` +
-    (f.k_first_fail ? `First out-of-spec device expected in about <b>${f.k_first_fail}</b> devices.` : 'No out-of-spec device expected within 300 devices yet.')};
-  return {s: 'ok', text: f ? `Depth is stable and inside the 13–17 mm limits. Chance that the next device is out of spec: <b>${pct(f.p_next)}</b>.`
+    (f.k_median ? `First out-of-spec device expected in about <b>${f.k_median}</b> devices.` : 'No out-of-spec device expected within 300 devices yet.')};
+  return {s: 'ok', text: f ? `Depth is stable and inside the 13–17 mm limits. Chance that the next device is out of spec: <b>${pct(f.p_next)}</b>` +
+    (rule().holt ? ` (prediction is locked at ${pct(rule().p)}).` : '.')
     : 'Collecting the first devices before the drift check can start…'};
 }
 function stat(v, l, t) { return `<div class="stat" data-tip="${t}"><div class="v">${v}</div><div class="l">${l}</div></div>`; }
@@ -249,9 +258,11 @@ function renderLive() {
       stat(ev.actual_depth_mm + ' mm', 'depth of that device', 'Measured insertion depth of the first out-of-spec device.')
       : stat(last.depth != null ? last.depth.toFixed(2) + ' mm' : '–', 'last device depth', 'Measured insertion depth of the most recent device. OK range 13.0–17.0 mm.') +
       stat(f ? signed(f.slope_mm_per_unit * 100, 1) + ' mm' : '–', 'drift per 100 devices', 'How fast the difference between measured and expected depth is changing. Near 0 = no drift.') +
-      stat(f ? pct(f.p_next) : '–', 'chance next device fails', 'Probability that the next device will be outside 13–17 mm, from the trend and the normal noise.') +
-      stat(!f ? '–' : f.drift_alarm ? (f.k_first_fail || '> 300') : 'none expected', 'devices until first failure',
-        'Only estimated once drift is detected: where the forecast puts the first out-of-spec device (cautious estimate, 5 % chance it comes sooner).');
+      stat(f ? pct(f.p_next) : '–', 'chance next device fails', rule().holt
+        ? `Probability that the next device will be outside 13–17 mm: expected depth for its bag, tube and pressure plus the smoothed recent difference (level and trend) and normal noise. At ${pct(rule().p)} the prediction is locked on the device ${rule().lead} ahead.`
+        : 'Probability that the next device will be outside 13–17 mm, from the trend and the normal noise.') +
+      stat(!f ? '–' : f.drift_alarm ? (f.k_median || '> 300') : 'none expected', 'devices until first failure',
+        'Only estimated once drift is detected: the median of the drift forecast for the first out-of-spec device. For information; the lock uses the chance above.');
     $('card-' + line).querySelectorAll('canvas, h3').forEach(el => el.style.display = u.length ? '' : 'none');
     if (!u.length) continue;
     const x0 = u[0].event_no, xe = u[u.length - 1].event_no, fc = f && f.path ? f.path.slice(0, 40) : [], x1 = xe + (fc.length || 1);
@@ -272,7 +283,7 @@ function renderLive() {
       {label: 'pushing shallower', data: u.map(r => ({x: r.event_no, y: r.cusum_neg})), borderColor: PAL[0], borderWidth: 1.3, pointRadius: 0, showLine: true},
       hline(5, x0, xe, C.grey, 'alarm level 5', [3, 3])]}, options: opts({y: 'meter', ymin: 0, ymax: Math.min(20, Math.max(8, ...u.map(r => Math.max(r.cusum_pos, r.cusum_neg))))})});
     $('lk-' + line).innerHTML = p ? `<div class="lockbox">🔒 <b>Locked prediction: ${p.predicted_unit_id}</b> will be the first device out of spec (${p.predicted_failure_mode === 'TOO_DEEP' ? 'too deep' : 'too shallow'}).<br>
-      Saved at ${p.prediction_time_utc} while ${p.current_unit_id} was being made, ${p.units_ahead} devices ahead.<br>
+      Saved at ${p.prediction_time_utc} while ${p.current_unit_id} was being made, ${p.units_ahead} devices ahead (${term('lead', 'lead time')} L = ${p.units_ahead}).<br>
       <span class="hash" data-tip="SHA-256 fingerprint of this prediction record. If anyone changed it, the fingerprint would no longer match.">fingerprint ${p.entry_hash}</span>
       ${L.evaluation ? `<br><b>Result:</b> ${resultText(L.evaluation)}` : ''}</div>` : '';
   }
@@ -565,12 +576,12 @@ async function loadCmp() {
   const f = (v, b) => v >= 1 ? `<b class="FAIL" data-tip="Broke down: off by more than 1 mm.">${v.toFixed(1)} ✖</b>` : `<span style="${v === b ? 'font-weight:700' : ''}">${v.toFixed(3)}</span>`;
   const BOX = {white: 'white box', grey: 'grey box', black: 'black box'};
   $('m-table').innerHTML = `<tr><th>model</th><th>type</th><th>${term('box', 'explainability')}</th><th>random split</th><th>new lots</th><th>${term('unseen', 'unseen setting')}</th><th>future</th>
-    <th>numbers inside</th><th>twin: failures caught early</th><th>twin: ${term('falsealarm', 'false alarm')}</th></tr>` +
+    <th>numbers inside</th><th>twin: ${term('jury', 'E ≤ 2')}</th><th>twin: locked before failure</th><th>twin: ${term('falsealarm', 'false alarm')}</th></tr>` +
     R.models.map(m => {
       const t = R.twin[m.key], info = MODEL[m.key] || {};
       return `<tr class="${m.key === 'M03' ? 'hl' : ''}"><td>${modelTag(m.key)}</td><td>${info.kind || m.family}</td><td><span class="box ${m.box}">${BOX[m.box]}</span></td>
         ${['random', 'new_lots', 'unseen', 'future'].map(k => `<td>${f(m.tests[k].rmse, best(k))}</td>`).join('')}
-        <td>${m.n_parameters != null ? fmt(m.n_parameters) : 1}</td><td>${t ? t['caught_in_advance_%'] + ' %' : '–'}</td>
+        <td>${m.n_parameters != null ? fmt(m.n_parameters) : 1}</td><td>${t && t['E<=2_%'] != null ? t['E<=2_%'] + ' %' : '–'}</td><td>${t ? t['caught_in_advance_%'] + ' %' : '–'}</td>
         <td>${t ? (t.false_prediction_on_stable_line ? '<b class="FAIL">yes</b>' : 'no') : '–'}</td></tr>`;
     }).join('');
   const P = R.permutation_importance, cols = Object.keys(Object.values(P)[0]);
@@ -590,7 +601,9 @@ async function loadCmp() {
       ${(p.tests.random.rmse - g.tests.random.rmse).toFixed(3)} mm better (${g.tests.random.rmse.toFixed(3)} vs ${p.tests.random.rmse.toFixed(3)} mm). The rest is normal part-to-part noise no model can predict.</p>
     <p><b>2. On a new setting, most models fall apart.</b> When a pressure, bag size or tube size was ${term('unseen', 'never seen in training')}, tree models get about 60 % worse,
       the lookup table can only guess the average, and the neural network is off by ${nn.tests.unseen.rmse.toFixed(1)} mm. The formula stays at ${p.tests.unseen.rmse.toFixed(3)} mm.</p>
-    <p><b>3. Inside the twin, the choice hardly matters.</b> Every real model catches about the same share of failures early.</p>
+    <p><b>3. Inside the twin, the choice hardly matters.</b> Every model that uses bag port, tube size and pressure predicts about the same share of failures
+      within 2 devices (${term('jury', 'E ≤ 2')}: ${modelTag('M03')} ${R.twin.M03 ? R.twin.M03['E<=2_%'] : '–'} %, best ${Math.max(...Object.values(R.twin).map(t => t['E<=2_%'] || 0))} % on ${R.twin.M03 ? R.twin.M03.scenarios : '–'} scenarios).
+      Without them (${modelTag('M00')}) the twin is less accurate and raises a false alarm.</p>
     <p><b>4. The formula is easy to validate.</b> 4 numbers with a physical meaning, checkable by hand. ML needs more validation (GAMP 5 category 5), monitoring for model drift,
       and cannot be explained to an inspector. The ${modelTag('M12')} is the only credible alternative.</p>`;
 }
