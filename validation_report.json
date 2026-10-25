@@ -1,20 +1,108 @@
 {
-  "model_version": "BL-81e6834c473f",
+  "model_version": "BL-4d0fafa131cb",
+  "active_estimator": "holt_next",
   "part1": [
     {
-      "horizon": 3,
-      "scenarios": 80,
-      "exact_hit_%": 5.0,
-      "within_2_units_%": 15.0,
-      "within_5_units_%": 22.5,
-      "missed_%": 25.0,
-      "median_abs_err": 9
+      "config": "quantile h=3",
+      "scenarios": 95,
+      "exact_hit_%": 4.2,
+      "E<=2_%": 12.6,
+      "E<=5_%": 18.9,
+      "missed_%": 34.7,
+      "median_E": 9,
+      "mean_L": 2.6,
+      "drift": {
+        "scenarios": 80,
+        "exact_hit_%": 5.0,
+        "E<=2_%": 15.0,
+        "E<=5_%": 22.5,
+        "missed_%": 25.0,
+        "median_E": 9,
+        "mean_L": 2.6
+      },
+      "step": {
+        "scenarios": 15,
+        "exact_hit_%": 0.0,
+        "E<=2_%": 0.0,
+        "E<=5_%": 0.0,
+        "missed_%": 86.7,
+        "median_E": 177,
+        "mean_L": 1.5
+      }
+    },
+    {
+      "config": "holt_next p>=0.1 L=3",
+      "scenarios": 95,
+      "exact_hit_%": 0.0,
+      "E<=2_%": 26.3,
+      "E<=5_%": 32.6,
+      "missed_%": 34.7,
+      "median_E": 6,
+      "mean_L": 3.0,
+      "drift": {
+        "scenarios": 80,
+        "exact_hit_%": 0.0,
+        "E<=2_%": 30.0,
+        "E<=5_%": 37.5,
+        "missed_%": 27.5,
+        "median_E": 5,
+        "mean_L": 3.0
+      },
+      "step": {
+        "scenarios": 15,
+        "exact_hit_%": 0.0,
+        "E<=2_%": 6.7,
+        "E<=5_%": 6.7,
+        "missed_%": 73.3,
+        "median_E": 43,
+        "mean_L": 3.0
+      }
+    },
+    {
+      "config": "holt_next p>=0.2 L=2",
+      "scenarios": 95,
+      "exact_hit_%": 8.4,
+      "E<=2_%": 25.3,
+      "E<=5_%": 29.5,
+      "missed_%": 51.6,
+      "median_E": 2,
+      "mean_L": 2.0,
+      "drift": {
+        "scenarios": 80,
+        "exact_hit_%": 10.0,
+        "E<=2_%": 30.0,
+        "E<=5_%": 35.0,
+        "missed_%": 45.0,
+        "median_E": 2,
+        "mean_L": 2.0
+      },
+      "step": {
+        "scenarios": 15,
+        "exact_hit_%": 0.0,
+        "E<=2_%": 0.0,
+        "E<=5_%": 0.0,
+        "missed_%": 86.7,
+        "median_E": 33,
+        "mean_L": 2.0
+      }
     }
   ],
   "part2": {
-    "units": 1800,
-    "false_predictions": 0,
-    "failures": 0
+    "quantile h=3": {
+      "units": 1800,
+      "false_predictions": 0,
+      "failures": 0
+    },
+    "holt_next p>=0.1 L=3": {
+      "units": 1800,
+      "false_predictions": 0,
+      "failures": 0
+    },
+    "holt_next p>=0.2 L=2": {
+      "units": 1800,
+      "false_predictions": 0,
+      "failures": 0
+    }
   },
   "part3": {
     "update_blocked": true,

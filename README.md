@@ -1,9 +1,11 @@
 # Gate 3 – Digital Twin: first-failure prediction for ASM-01/02/03
 
+Scoring and event rules we must follow: [`RULES.md`](RULES.md).
+
 ## Run
 ```bash
 python3 model.py                       # fit + freeze the white-box baseline on HISTORICAL data -> model.json
-python3 validate.py 3                  # OQ: prediction scenarios, false alarms, data-integrity tests
+python3 validate.py                    # OQ: both commit rules on E/L, false alarms, data-integrity tests
 python3 monitor.py --mode SIM          # offline demo with injected de-calibration (synthetic, flagged SIM)
 python3 monitor.py --mode REALTIME --team 01 --code <passcode> --limit 1
 python3 dashboard.py --mode REALTIME   # http://localhost:8050 (read-only)
@@ -36,13 +38,33 @@ Use `--limit 1` in REALTIME so each prediction is committed before the next unit
 2. Residual = measured − baseline. A calibrated line gives pure noise (σ ≈ 0.17 mm).
 3. De-calibration alarm: CUSUM ≥ 5σ, plus a straight line through the residuals since the drift onset
    with |t| ≥ 3 in the same direction, held for 3 units.
-4. Forecast: extend the line, add normal noise → P(fail) per future unit → first-failure distribution.
-   Commit the unit at the 5 % quantile once it is ≤ 3 units ahead. This errs early, which is the safe side.
+4. Forecast: extend the line, add normal noise → P(fail) per future unit → first-failure distribution
+   (shown on the dashboard).
+5. Commit rule (`detector.estimator` in `model.json`, one prediction per line, immutable):
+   - **`holt_next` (default):** Holt smoothing of the residual (level + trend) gives P(next unit fails).
+     When it reaches 0.1, the prediction is X = current unit + 3, so the lead time is L = 3.
+   - **`quantile` (previous default):** commits the 5 % quantile of the forecast first failure once it is
+     ≤ 3 units ahead, after the alarm has held for 3 units.
 
-Validation (`validation_report.json`, 80 synthetic drift scenarios + 1,800 stable units):
-0 false predictions on the stable line. 75 % of failures predicted in advance. Most predictions are early
-(median error 9 units). Exact unit hits are rare (5 %), because the first failure is a random tail event
-when part-to-part noise is about 0.17 mm. This limit is stated openly, not hidden.
+Validation (`validate.py` → `validation_report.json`):
+- **Scenarios:** 95 synthetic de-calibrations: 80 drifts (actuator or vision, both directions) and 15 steps.
+  The stable line has 1,800 units.
+- **Scoring:** the jury metrics in `RULES.md`, E = |Z − X| (error) and L = X − Y (lead).
+
+| Commit rule | E ≤ 2 | E ≤ 5 | Missed | Median E | L | False predictions on stable line |
+|---|---|---|---|---|---|---|
+| `holt_next` p ≥ 0.1, L = 3 | **26 %** | 33 % | 35 % | 6 | 3 | 0 |
+| `quantile` h = 3 | 13 % | 19 % | 35 % | 9 | 2.6 | 0 |
+
+- **Variants tried and rejected:** a drift-rate-based lead (E ≤ 2 about 2 %), a 2-unit persistence (missed 54 %),
+  and p ≥ 0.2 with L = 2 (missed 52 %).
+- **Limits:**
+  - Exact unit hits stay rare, because the first failure is a random tail event when part-to-part noise is about
+    0.17 mm.
+  - Slow drifts are locked early.
+  - A sudden step cannot be foreseen before the first shifted unit.
+
+  These limits are stated openly, not hidden.
 
 ## Model lab (Data analysis tab, `lab.py`)
 Pick a **training dataset**, a **test dataset** and up to 8 models, then click *Train & compare*.

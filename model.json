@@ -21,15 +21,18 @@
     "cusum_h": 5.0,
     "persist_units": 3,
     "horizon_units": 3,
-    "p_next_commit": 0.5,
-    "estimator": "quantile",
+    "p_next_commit": 0.1,
+    "estimator": "holt_next",
     "quantile": 0.05,
-    "max_lookahead": 300
+    "max_lookahead": 300,
+    "holt_alpha": 0.3,
+    "holt_beta": 0.05,
+    "lead_units": 3
   },
   "training_data_sha256": {
     "ASM-01": "22c63fbacf31a0933d07632a64f576003cab5ce97c652351e05aa0231272ff1b",
     "PVC-01": "35802f3eda0be9bd26e5d6c5c6771a2283d9d231941bce2841b828099ca62ab0",
     "BAG-01": "5a5f1c10540c94eba44083995e1023597bc7413109f40f950c31dc3bbae0a149"
   },
-  "version": "BL-81e6834c473f"
+  "version": "BL-4d0fafa131cb"
 }
