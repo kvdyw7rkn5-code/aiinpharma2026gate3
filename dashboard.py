@@ -98,7 +98,7 @@ class LiveState:
         mat = self.book.summary()
         m = self.model or {}
         return {"tip": tip, "mode": self.mode, "integrity": {"ok": ok, "entries": n, "problem": problem},
-                "model": {k: m.get(k) for k in ("version", "formula", "coef", "sigma_mm", "r2")},
+                "model": {k: m.get(k) for k in ("version", "formula", "coef", "sigma_mm", "r2", "detector")},
                 "lines": lines, "alerts": self.alerts[-40:],
                 "materials": {"bag": {k: round(v["mean"], 5) for k, v in mat["bag_lots"].items()},
                               "pvc": {k: round(v["mean"], 5) for k, v in mat["reels"].items()}}}
