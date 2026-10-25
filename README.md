@@ -69,7 +69,7 @@ Validation (`validate.py` → `validation_report.json`):
 
   These limits are stated openly, not hidden.
 
-## Model lab (Data analysis tab, `lab.py`)
+## Model lab (Model lab tab, `lab.py`)
 Pick a **training dataset**, a **test dataset** and up to 8 models, then click *Train & compare*.
 
 | Dataset | What it is |

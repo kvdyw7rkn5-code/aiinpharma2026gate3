@@ -113,8 +113,12 @@ def urs_checks(db, mode):
                        (md, p["line_id"], pl["predicted_unit_id"]))
             before = (not later) or later[0]["seq"] > p["seq"]
             ok_all &= has and before
+            ev = _q(lg, "SELECT payload FROM ledger WHERE mode=? AND kind='EVALUATION' AND line_id=?", (md, p["line_id"]))
+            evp = json.loads(ev[0]["payload"]) if ev else {}
+            jury = f" (L = {pl.get('units_ahead')}" + (f", E = {evp['E_abs_error_units']} vs actual {evp['actual_first_failure_unit_id']})"
+                                                     if evp.get("E_abs_error_units") is not None else ")")
             facts.append(f"{p['line_id']}: predicted {pl['predicted_unit_id']} while processing {pl['current_unit_id']} "
-                         f"at {pl['prediction_time_utc']} – " +
+                         f"at {pl['prediction_time_utc']}{jury} – " +
                          ("locked before that unit was received" if later and before else
                           "that unit has not been produced yet" if not later else "NOT before the unit") +
                          ("" if has else " – MISSING FIELDS"))

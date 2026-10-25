@@ -677,10 +677,11 @@ async function traceUnit(id) {
          (${p.min}–${p.max})<br>extruded ${p.first_time} → ${p.last_time}<br><span class="mono">${p.first_uid} … ${p.last_uid.split('/').pop()}</span>`)
         : linkbox('trace-pvc', 'bad', '4 · Tube reel', 'No PVC-01 data for this reel.')}
       ${P ? linkbox('trace-pred', 'lockc', '5 · Prediction for ' + T.line_id, `predicted first failure <b>${P.predicted_unit_id}</b><br>while processing ${P.current_unit_id}<br>
-         locked ${P.prediction_time_utc}<br><span class="mono">${P.record_uid}<br>fingerprint ${P.entry_hash.slice(0, 16)}…</span>`)
+         locked ${P.prediction_time_utc}<br>${term('lead', 'lead time')} L = X − Y = <b>${P.units_ahead}</b><br><span class="mono">${P.record_uid}<br>fingerprint ${P.entry_hash.slice(0, 16)}…</span>`)
         : linkbox('trace-pred', 'none', '5 · Prediction for ' + T.line_id, 'No prediction on this line: no de-calibration was detected.')}
       ${linkbox('trace-insp', I.conforming ? 'ok' : 'bad', '6 · Inspection result', `camera depth <b>${I.depth_mm} mm</b><br>limits ${I.limits_mm.join('–')} mm →
-         ${I.conforming ? 'conforming' : '<b class="FAIL">nonconforming</b>'}` + (E ? `<br>line's first failure: <b>${E.actual_first_failure_unit_id}</b><br>prediction result: <b>${E.status}</b>` : ''))}
+         ${I.conforming ? 'conforming' : '<b class="FAIL">nonconforming</b>'}` + (E ? `<br>line's first failure: <b>${E.actual_first_failure_unit_id}</b><br>prediction result: <b>${E.status}</b>` +
+           (E.E_abs_error_units != null ? `<br>${term('jury', 'jury error')} E = |Z − X| = <b>${E.E_abs_error_units}</b>` : '') : ''))}
     </div>
     <div class="grid2 tight"><div><h3>Original record, exactly as received</h3>${kv(T.record)}</div>
       <div><h3>Ledger entry</h3>${kv({'record ID': L.record_uid, 'ledger position': L.seq, 'event number': L.event_no, 'source time': L.source_time,
